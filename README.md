@@ -148,6 +148,101 @@ ikRequest([x,y,z], [qx,qy,qz,qw])
 
 ---
 
+# Documentation Folder Structure
+
+The `documentation/` folder contains all technical and usage documentation for the 6-axis robot project. This helps developers, integrators, and contributors understand how the system works and how to interface with it.
+
+---
+
+## 📁 Structure Overview
+
+```
+documentation/
+├── SerialAPI.md             # Full list of supported Teensy JSON commands
+├── PiBridge_API.md          # Description of Node.js + Python bridge architecture and events
+├── Frontend_API.md          # React DataContext API and UI tab reference
+├── SetupGuide.md            # Step-by-step hardware and software setup guide
+├── DeveloperNotes.md        # Coding conventions, architecture notes, and design decisions
+├── Troubleshooting.md       # Common issues and how to resolve them
+└── Glossary.md              # Definitions of project-specific terms and acronyms
+```
+
+---
+
+## 🔧 File Purposes
+
+### 1. `SerialAPI.md`
+
+Reference for all Teensy firmware JSON serial commands:
+
+* Request/response formats
+* Field types and expected values
+* Asynchronous events (e.g., `homed`, `inputStatus`)
+
+### 2. `PiBridge_API.md`
+
+Covers the Node.js + Python bridge:
+
+* Socket.IO events (client ↔ server)
+* IK/FK request structure
+* Serial forwarding logic
+
+### 3. `Frontend_API.md`
+
+Details the React frontend:
+
+* `useData()` API
+* UI tab responsibilities
+* Component architecture
+* State and command flows
+
+### 4. `SetupGuide.md`
+
+Hardware and software installation:
+
+* Wiring (motors, limit switches, estop)
+* Teensy flashing and config
+* Pi software setup and dependencies
+* Running the full stack
+
+### 5. `DeveloperNotes.md`
+
+Design insights:
+
+* Non-blocking stepper strategy
+* Homing phases
+* Param storage format
+* CommManager routing logic
+
+### 6. `Troubleshooting.md`
+
+For debugging and recovery:
+
+* Serial issues
+* IK failures
+* Homing stuck
+* Pi–Teensy disconnects
+
+### 7. `Glossary.md`
+
+Terminology and abbreviations:
+
+* "FK", "IK", "URDF", "JointOffset", etc.
+
+---
+
+## 🧭 Contribution Tip
+
+When adding new commands, events, or architecture changes:
+
+* Update the relevant `.md` file in `documentation/`
+* Keep format consistent: title, request, response, notes
+
+This ensures clean integration for other developers and future contributors.
+
+> Next: Would you like to begin with `SerialAPI.md` or `SetupGuide.md`?
+
+
 ## 🛠 Roadmap
 
 * [ ] Switch from IKPy to Peter Corke Robotics Toolbox
