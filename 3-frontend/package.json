@@ -1,0 +1,102 @@
+{
+  "name": "robot-pendant",
+  "version": "0.1.0",
+  "description": "My Electron App using React",
+  "author": "Your Name",
+  "private": true,
+  "dependencies": {
+    "@chakra-ui/form-control": "^2.2.0",
+    "@chakra-ui/react": "^2.10.7",
+    "@craco/craco": "^7.1.0",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@fontsource-variable/inter": "^5.2.5",
+    "@react-three/drei": "^10.0.4",
+    "@react-three/fiber": "^9.1.0",
+    "@saas-ui/react": "^2.11.4",
+    "@tanstack/react-query": "^5.69.0",
+    "@tanstack/react-query-devtools": "^5.69.0",
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@testing-library/user-event": "^13.5.0",
+    "electron-squirrel-startup": "^1.0.1",
+    "express": "^5.1.0",
+    "framer-motion": "^12.5.0",
+    "kinematics": "^1.0.2",
+    "kinematics-js": "^1.0.8",
+    "mathjs": "^14.3.1",
+    "next-themes": "^0.4.6",
+    "react": "^19.0.0",
+    "react-beautiful-dnd": "^13.1.1",
+    "react-dom": "^19.0.0",
+    "react-icons": "^5.5.0",
+    "react-router-dom": "^7.3.0",
+    "react-scripts": "5.0.1",
+    "react-syntax-highlighter": "^15.6.1",
+    "robot-pendant": "file:",
+    "socket.io-client": "^4.8.1",
+    "three": "^0.174.0",
+    "three-ik": "^0.1.0",
+    "urdf-loader": "^0.12.4",
+    "web-vitals": "^2.1.4"
+  },
+  "homepage": "./",
+  "main": "public/electron.js",
+  "scripts": {
+    "start": "concurrently \"npm run start:react\" \"wait-on http://localhost:3000 && npm run start:electron\"",
+    "start:react": "react-scripts start",
+    "start:electron": "electron main.js",
+    "build": "react-scripts build",
+    "electron:start": "electron main.js",
+    "electron:build": "electron-builder",
+    "preelectron-pack": "npm run build",
+    "electron-pack": "build --em.main=build/main.js"
+  },
+  "build": {
+    "appId": "com.mycompany.myapp",
+    "productName": "MyElectronApp",
+    "files": [
+      "build/**/*",
+      "node_modules/**/*",
+      "public/**/*"
+    ],
+    "directories": {
+      "buildResources": "assets"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "public/icon.png"
+    }
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "concurrently": "^9.2.0",
+    "electron": "^35.0.2",
+    "electron-builder": "^25.1.8",
+    "wait-on": "^8.0.3",
+    "webpack-cli": "^6.0.1"
+  }
+}
