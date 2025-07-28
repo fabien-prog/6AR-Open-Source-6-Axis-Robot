@@ -1,263 +1,146 @@
-# Teensy 6-Axis Robot Arm
+# 6AR – Open-Source 6-Axis Robotic Arm
 
-An open-source 6-axis robotic arm with real-time motion control, powered by a Teensy 4.1 and bridged via Raspberry Pi to a React frontend and Python-based kinematics. Modular, extensible, and designed for high-performance applications in research, automation, or education.
+**6AR** is an diy, industrial-class and open-source **6-axis robot arm** designed from scratch for high performance, reliability, and modularity — without the industrial price tag.
 
----
+Built around a **Teensy 4.1**, a **Raspberry Pi 5**, and a **React-based control interface**, 6AR offers a powerful platform for robotics education, research, automation, and fun!
 
-## 🔩 System Overview
-
-* **Teensy Firmware**: C++ firmware managing stepper-driven motion, homing, jogging, and soft limits via Serial2 JSON API.
-* **Raspberry Pi Bridge**: Node.js server mediating between Teensy and a Python kinematics backend, exposing a WebSocket (Socket.IO) API.
-* **React Frontend**: Modern interface for controlling motion, IO, viewing logs, and editing programs. Features 3D URDF visualization with Three.js.
+> This project was born from a personal desire to **challenge myself**, to create something professional-grade using open tools — and hopefully inspire a growing community of builders, learners, and tinkerers who share that vision.
 
 ---
 
-## 📁 Repository Structure
+## 🎯 Vision & Motivation
 
-```
-firmware/            # Teensy 4.1 embedded code
- ├─ Config.h/.cpp
- ├─ CalibrationManager.cpp
- ├─ CommManager.cpp
- ├─ IOManager.cpp
- ├─ SafetyManager.cpp
- └─ main.cpp
+My goal with this project was to build a robot arm that behaves **as closely as possible to a real industrial 6 axis manipulator**:
 
-pi-bridge/           # Raspberry Pi Node.js + Python server
- ├─ server.js        # Socket.IO + serial bridge
- ├─ ik_service.py    # Python IK/FK service (Peter Corke / ikpy)
- └─ venv/            # Python virtualenv with dependencies
+- Accurate and smooth motion
+- Fully programmable and networked
+- Real-time control
+- Configurable and extensible
+- Affordable (compared to commercial solutions)
 
-frontend/            # React UI client
- ├─ App.js
- ├─ DataContext.js
- ├─ tabs/            # UI pages (RunTab, MoveAxisTab, etc.)
- └─ components/      # Shared widgets & editors
-```
+I wanted to prove that with modern tools — 3D printing, CNC machining, a few well-chosen components, and smart software — anyone can build a capable, safe, and powerful robot arm.
+
+I hope others will replicate, improve, and adapt this robot. A community around this could mean:
+
+- 🧠 Collective development and new features
+- 📦 New end-effectors, programs, or extensions
+- 📚 Shared learning in robotics, controls, and UI/UX
+- 🤝 Helping newcomers bring their robot ideas to life
 
 ---
 
-## 🔌 Firmware Serial API (Teensy)
+## ⚙️ Capabilities
 
-* Baud Rate: **115200** over **Serial2**
-* Command Format: newline-delimited JSON (`{"cmd":"Home"}\n`)
-
-Supported commands:
-
-* `GetInputs`, `GetOutputs`, `GetSystemStatus`, `GetJointStatus`
-* `MoveTo`, `MoveBy`, `MoveMultiple`
-* `Jog`, `Stop`, `StopAll`
-* `Home`, `AbortHoming`, `IsHoming`
-* `SetParam`, `GetParam`, `ListParameters`
-* `SetSoftLimits`, `SetMaxSpeed`, etc.
-* `Output` (for digital outputs)
-
-Refer to `firmware/docs/SerialAPI.md` for the full list.
+| Feature                          | Description                                                                 |
+|----------------------------------|-----------------------------------------------------------------------------|
+| Full Pose IK                     | Solve for Cartesian position **and** orientation with joint limits          |
+| Linear TCP Pathing               | Trapezoidal velocity motion over multiple IK poses                          |
+| Real-Time Stepper Control        | All axis updates happen on Teensy in real time                              |
+| Web-Based Control Interface      | React frontend with jog, run, 3D viewer, IO, and drag-and-drop programming  |
+| Python Kinematics Service        | Fast (<7ms) IK/FK using Peter Corke’s Robotics Toolbox                      |
+| Drag-and-Drop Graphical Editor   | Build sequences with loops, conditions, motion, and delays                  |
+| Pneumatic Gripper Control        | Via onboard compressor and solenoid valve                                   |
+| Closed-Loop Control              | On all joints (stepper + servo), real-time position feedback coming soon    |
 
 ---
 
-## 📡 Pi Bridge (Node.js + Python)
+## 📦 Specs
 
-### 🔧 Architecture
+| Parameter        | Value                    |
+|------------------|--------------------------|
+| Payload          | ~15 kg @ 1000 mm radius  |
+| Reach            | 1000 mm                  |
+| Robot weight     | ~60 kg                   |
+| Control box      | ~25 kg                   |
+| Total cost       | ~6000 CAD (materials)    |
+| Dev time so far  | ~8 months full-time      |
 
-* **Node.js Server**
+### 🔩 Joint Details
 
-  * Opens serial port to Teensy (`/dev/ttyAMA0` @ 38400 baud)
-  * Spawns `ik_service.py` as subprocess
-  * Handles bidirectional JSON messages
-  * Exposes **Socket.IO** interface to frontend
-
-* **Python Kinematics**
-
-  * Loads URDF via `ikpy.Chain`
-  * Responds to IK/FK requests on stdin/stdout
-  * Uses Peter Corke’s Robotics Toolbox (future-ready)
-
-### 🔁 Socket.IO Events
-
-* `ik_request`, `fk_request` → to Python
-* `cmd` → forwarded to Teensy
-* Broadcasts: `inputStatus`, `jointStatus`, `systemStatus`, etc.
-
----
-
-## 🧠 Python IK Service (`ik_service.py`)
-
-* **Input**: JSON via stdin
-
-  * `{ "angles": [a1, a2, ..., a6] }` → FK
-  * `{ "position": [...], "quaternion": [...] }` → IK
-
-* **Output**: JSON via stdout
-
-  * FK: `{ "position": [...], "orientation": [...], "timing_ms": {...} }`
-  * IK: `{ "angles": [...], "timing_ms": {...} }`
-
-* Uses scipy + ikpy
-
-* Two-stage IK solver with fallback
+| Joint | Drive Type                                              | Torque (Nm) | Max Speed (°/s) |
+|-------|---------------------------------------------------------|-------------|-----------------|
+| J1    | Belt + NEMA 34 closed-loop                              | 154         | 110             |
+| J2    | ISV57T servo + planetary gearbox + belt + cycloidal     | 270         | 45              |
+| J3    | ISV57T servo + planetary gearbox+ belt  + cycloidal     | 170         | 45              |
+| J4    | NEMA 23 + cycloidal                                     | 84          | 250             |
+| J5    | NEMA 23 + planetary gearbox                             | 24          | 240             |
+| J6    | NEMA 23 + planetary gearbox                             | 12          | 720             |
+| J7    | Linear rail (WIP)                                       | TBD         | TBD             |
 
 ---
 
-## 💻 React Frontend (UI)
+## 🛠️ Architecture Overview
 
-### 🔧 Architecture
-
-* Chakra UI + Three.js (via @react-three/fiber)
-* `DataContext.js`: centralized Socket.IO state + actions
-* Tabs: Run, MoveAxis, IOControls, Logs, Settings, Program Editor
-* URDF model viewer with real-time joint angle updates
-
-### 🔌 Commands via `useData()`
-
-```js
-moveTo(joint, target, speed, accel)
-moveBy(joint, delta, speed, accel)
-jog(joint, speed)
-stop(joint)
-home(joint, speedFast, speedSlow)
-output([id1, id2], [1, 0])
-ikRequest([x,y,z], [qx,qy,qz,qw])
-```
-
-### 📥 Socket Events Received
-
-* `inputStatus`, `jointStatus`, `systemStatus`, `outputStatus`
-* `ik_response`, `fk_response`, `parameters`, `homed`, `log`
-
----
-
-## 🧪 Getting Started
-
-1. **Flash Firmware** to Teensy 4.1 via Arduino IDE or PlatformIO
-2. **Run Pi Bridge**
-
-   ```bash
-   cd pi-bridge
-   npm install
-   node server.js
-   ```
-3. **Start UI**
-
-   ```bash
-   cd frontend
-   npm install
-   npm start
-   ```
-4. Open [http://localhost:3000](http://localhost:3000) in your browser
-
----
-
-# Documentation Folder Structure
-
-The `documentation/` folder contains all technical and usage documentation for the 6-axis robot project. This helps developers, integrators, and contributors understand how the system works and how to interface with it.
-
----
-
-## 📁 Structure Overview
-
-```
-documentation/
-├── SerialAPI.md             # Full list of supported Teensy JSON commands
-├── PiBridge_API.md          # Description of Node.js + Python bridge architecture and events
-├── Frontend_API.md          # React DataContext API and UI tab reference
-├── SetupGuide.md            # Step-by-step hardware and software setup guide
-├── DeveloperNotes.md        # Coding conventions, architecture notes, and design decisions
-├── Troubleshooting.md       # Common issues and how to resolve them
-└── Glossary.md              # Definitions of project-specific terms and acronyms
+```bash
+6AR-Open-Source-6-Axis-Robot/
+├── firmware/        → C++ code for Teensy (stepper control, homing, comms)
+├── pi-bridge/       → Node.js + Python server (IK, routing, serial)
+├── frontend/        → React UI with live 3D URDF and programming interface
+└── documentation/   → Full developer documentation (see below)
 ```
 
 ---
 
-## 🔧 File Purposes
+## 📂 Documentation
 
-### 1. `SerialAPI.md`
+> All technical documentation lives in the [`documentation/`](./documentation) folder.
 
-Reference for all Teensy firmware JSON serial commands:
-
-* Request/response formats
-* Field types and expected values
-* Asynchronous events (e.g., `homed`, `inputStatus`)
-
-### 2. `PiBridge_API.md`
-
-Covers the Node.js + Python bridge:
-
-* Socket.IO events (client ↔ server)
-* IK/FK request structure
-* Serial forwarding logic
-
-### 3. `Frontend_API.md`
-
-Details the React frontend:
-
-* `useData()` API
-* UI tab responsibilities
-* Component architecture
-* State and command flows
-
-### 4. `SetupGuide.md`
-
-Hardware and software installation:
-
-* Wiring (motors, limit switches, estop)
-* Teensy flashing and config
-* Pi software setup and dependencies
-* Running the full stack
-
-### 5. `DeveloperNotes.md`
-
-Design insights:
-
-* Non-blocking stepper strategy
-* Homing phases
-* Param storage format
-* CommManager routing logic
-
-### 6. `Troubleshooting.md`
-
-For debugging and recovery:
-
-* Serial issues
-* IK failures
-* Homing stuck
-* Pi–Teensy disconnects
-
-### 7. `Glossary.md`
-
-Terminology and abbreviations:
-
-* "FK", "IK", "URDF", "JointOffset", etc.
+| File | Description |
+|------|-------------|
+| [`1-Teensy-Code-Overview.md`](./documentation/1-Teensy-Code-Overview.md) | Core architecture, managers, and motion control on the Teensy |
+| [`1-Teensy-Serial-API.md`](./documentation/1-Teensy-Serial-API.md)       | Full reference for all JSON commands Teensy accepts (e.g. `moveTo`, `home`) |
+| [`2-Pi-Bridge-Overview.md`](./documentation/2-Pi-Bridge-Overview.md)     | Explains Node.js/Python architecture and Socket.IO routes |
+| [`3-Frontend-Overview.md`](./documentation/3-Frontend-Overview.md)       | Layout of React UI, `useData` hook, event flow, tabs, and state |
+| [`4-Setup-Guide.md`](./documentation/4-Setup-Guide.md)                   | From wiring (TODO) to flashing to launching everything — step-by-step |
+| [`5-Developer-Notes.md`](./documentation/5-Developer-Notes.md)           | Coding rules, naming conventions, structural decisions |
+| [`6-Glossary.md`](./documentation/6-Glossary.md)                         | All acronyms and robotics terms used in this repo |
 
 ---
 
-## 🧭 Contribution Tip
+## 🌐 Tech Stack
 
-When adding new commands, events, or architecture changes:
-
-* Update the relevant `.md` file in `documentation/`
-* Keep format consistent: title, request, response, notes
-
-This ensures clean integration for other developers and future contributors.
-
-## 🛠 Roadmap
-
-* [ ] Switch from IKPy to Peter Corke Robotics Toolbox
-* [ ] Queue/trajectory execution
-* [ ] Real-time ROS2 bridge
-* [ ] REST API & WebUSB support
-* [ ] Hardware encoder integration
+- **Microcontroller**: [Teensy 4.1](https://www.pjrc.com/store/teensy41.html)
+- **Host CPU**: Raspberry Pi 5
+- **Frontend**: React.js + Chakra UI + Three.js
+- **Backend**: Node.js + Python 3 (Robotics Toolbox)
+- **Stepper drivers**: Step/Dir closed-loop (OMC, StepperOnline)
+- **Servos**: ISV57T-180S (3500 RPM at 48V)
+- **Pneumatics**: Onboard compressor + SMC MH2F-16D2 gripper
 
 ---
 
-## 📖 License
+## 💬 Community & Development
 
-MIT License – free to use, modify, and contribute.
+This started as a solo project, but I’d love for it to grow:
+
+- 🛠 Want to build your own version?
+- 🧠 Interested in helping with firmware/UI/IK?
+- 🎓 A teacher or student using this in class?
+- 🤖 Want to add ROS2, simulation, or vision?
+
+Let’s build something incredible together. Open issues, make pull requests, or email me if you want to collaborate.
 
 ---
 
-## 🤝 Contributing
+## 📜 License
 
-We welcome PRs for everything from new UI panels to low-level firmware fixes. Please open an issue first for major features.
+MIT — free to use, modify, and distribute.
 
-> Built with love for embedded robotics. 🦾
+---
+
+## 📍 Next Milestones
+
+- [x] Drag-and-drop programming UI (Functionnal Proof of Concept implemented)
+- [x] Full pose IK + TCP motion profiler (Functionnal Proof of Concept implemented)
+- [x] Pneumatic gripper integration (Fully Functionnal)
+- [ ] Improve URDF mesh + joint limits (Simplify mesh for faster render)
+- [ ] Add joint feedback from Teensy to UI (Add absolute encoders to each joints and PID loop to teensy)
+- [ ] Make it easier to build: CAD cleanup + BOM + Assembly tips/videos
+
+---
+
+Built with joy, frustration, tens of thousands of lines of code, and a few cracked tables (Lol, I since put the robot on a steel plate. The inertia was too intense!).
+
+**– Fabien (a.k.a. Stayin_alive_ah on reddit or 6AR-Robotics on Insta + Youtube)** 🦾
+
+---
