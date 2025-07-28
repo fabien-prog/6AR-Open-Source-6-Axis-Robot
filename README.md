@@ -73,10 +73,10 @@ I hope others will replicate, improve, and adapt this robot. A community around 
 
 ```bash
 6AR-Open-Source-6-Axis-Robot/
-├── firmware/        → C++ code for Teensy (stepper control, homing, comms)
-├── pi-bridge/       → Node.js + Python server (IK, routing, serial)
-├── frontend/        → React UI with live 3D URDF and programming interface
-└── documentation/   → Full developer documentation (see below)
+├── 1-firmware/        → C++ code for Teensy (stepper control, homing, comms)
+├── 2-pi-bridge/       → Node.js + Python server (IK, routing, serial)
+├── 3-frontend/        → React UI with live 3D URDF and programming interface
+└── 4-documentation/   → Full developer documentation (see below)
 ```
 
 ---
