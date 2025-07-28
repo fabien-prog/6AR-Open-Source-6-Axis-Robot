@@ -83,17 +83,17 @@ I hope others will replicate, improve, and adapt this robot. A community around 
 
 ## 📂 Documentation
 
-> All technical documentation lives in the [`documentation/`](./documentation) folder.
+> All technical documentation lives in the [`documentation/`](./4-documentation) folder.
 
 | File | Description |
 |------|-------------|
-| [`1-Teensy-Code-Overview.md`](./documentation/1-Teensy-Code-Overview.md) | Core architecture, managers, and motion control on the Teensy |
-| [`1-Teensy-Serial-API.md`](./documentation/1-Teensy-Serial-API.md)       | Full reference for all JSON commands Teensy accepts (e.g. `moveTo`, `home`) |
-| [`2-Pi-Bridge-Overview.md`](./documentation/2-Pi-Bridge-Overview.md)     | Explains Node.js/Python architecture and Socket.IO routes |
-| [`3-Frontend-Overview.md`](./documentation/3-Frontend-Overview.md)       | Layout of React UI, `useData` hook, event flow, tabs, and state |
-| [`4-Setup-Guide.md`](./documentation/4-Setup-Guide.md)                   | From wiring (TODO) to flashing to launching everything — step-by-step |
-| [`5-Developer-Notes.md`](./documentation/5-Developer-Notes.md)           | Coding rules, naming conventions, structural decisions |
-| [`6-Glossary.md`](./documentation/6-Glossary.md)                         | All acronyms and robotics terms used in this repo |
+| [`1-Teensy-Code-Overview.md`](./4-documentation/1-Teensy-Code-Overview.md) | Core architecture, managers, and motion control on the Teensy |
+| [`1-Teensy-Serial-API.md`](./4-documentation/1-Teensy-Serial-API.md)       | Full reference for all JSON commands Teensy accepts (e.g. `moveTo`, `home`) |
+| [`2-Pi-Bridge-Overview.md`](./4-documentation/2-Pi-Bridge-Overview.md)     | Explains Node.js/Python architecture and Socket.IO routes |
+| [`3-Frontend-Overview.md`](./4-documentation/3-Frontend-Overview.md)       | Layout of React UI, `useData` hook, event flow, tabs, and state |
+| [`4-Setup-Guide.md`](./4-documentation/4-Setup-Guide.md)                   | From wiring (TODO) to flashing to launching everything — step-by-step |
+| [`5-Developer-Notes.md`](./4-documentation/5-Developer-Notes.md)           | Coding rules, naming conventions, structural decisions |
+| [`6-Glossary.md`](./4-documentation/6-Glossary.md)                         | All acronyms and robotics terms used in this repo |
 
 ---
 
