@@ -1,0 +1,43 @@
+# ─── 1-firmware (PlatformIO) ─────────────────────────────
+1-firmware/.pio/
+1-firmware/.vscode/
+1-firmware/.DS_Store
+1-firmware/.clang_complete
+1-firmware/.gcc-flags.json
+1-firmware/.travis.yml
+1-firmware/.pioenvs/
+1-firmware/.piolibdeps/
+1-firmware/.ccls-cache/
+1-firmware/.idea/
+1-firmware/.pytest_cache/
+1-firmware/.sconsign.dblite
+
+# ─── 2-pi-bridge (Node.js + Python) ──────────────────────
+2-pi-bridge/node_modules/
+2-pi-bridge/venv/
+2-pi-bridge/__pycache__/
+2-pi-bridge/*.pyc
+2-pi-bridge/*.pyo
+2-pi-bridge/*.log
+
+# ─── 3-frontend (React + Electron) ───────────────────────
+3-frontend/node_modules/
+3-frontend/dist/
+3-frontend/build/
+3-frontend/.next/
+3-frontend/.parcel-cache/
+3-frontend/.DS_Store
+3-frontend/*.log
+
+# ─── 4-documentation (Keep everything) ───────────────────
+# Nothing ignored here — keep all Markdown files
+
+# ─── Global ignores ──────────────────────────────────────
+*.log
+*.tmp
+*.swp
+*.bak
+.DS_Store
+Thumbs.db
+.env
+.env.local
