@@ -142,8 +142,8 @@ def profile_linear_move(req):
         vdeg  = np.clip(vdeg, -vmaxJ, vmaxJ)
         adeg  = np.clip(adeg, -amaxJ, amaxJ)
 
-        speeds.append(vdeg.round(2).tolist())
-        accels.append(adeg.round(1).tolist())
+        speeds.append(vdeg.round(3).tolist())
+        accels.append(np.abs(adeg).round(3).tolist())
 
         prev_q, prev_v = q1deg, vdeg
 
@@ -356,17 +356,24 @@ def main():
                 print(json.dumps({"angles":np.degrees(q_sol).tolist()}), flush=True)
             except Exception as e:
                 print(json.dumps({"error":str(e)}), flush=True)
-            
-        # 5) trapezoidal profiling request
+
+        # 5) trapezoidal *preview* profile (simulation only)
         elif "profileLinear" in req:
             profile_data = req["profileLinear"]
             if "jointLimits" in req:
                 profile_data["jointLimits"] = req["jointLimits"]
             profile_linear_move(profile_data)
 
-        # 6) unknown
+        # 6) NEW — trapezoidal profile intended for execution on the Teensy
+        elif "profileMoveToTeensy" in req:
+            profile_data = req["profileMoveToTeensy"]
+            if "jointLimits" in req:
+                profile_data["jointLimits"] = req["jointLimits"]
+            profile_linear_move(profile_data)   # same generator – just a different label
+
+        # 7) unknown
         else:
             print(json.dumps({"error":"Invalid arguments"}), flush=True)
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()

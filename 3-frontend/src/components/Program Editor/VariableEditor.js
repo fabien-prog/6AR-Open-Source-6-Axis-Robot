@@ -12,8 +12,8 @@ import {
   Button,
   useColorModeValue,
 } from "@chakra-ui/react";
-import { FiTrash2, FiPlus } from "react-icons/fi";
-import { useData } from "../Main/DataContext";  // adjust this path if needed
+import { FiTrash2, FiPlus, FiChevronUp, FiChevronDown } from "react-icons/fi";
+import { useData } from "../Main/DataContext";
 
 // Available variable categories.
 const variableCategories = [
@@ -22,19 +22,29 @@ const variableCategories = [
   "Work Object",
   "Robot Target",
 ];
-
 // Available data types.
 const dataTypes = ["Boolean", "Number", "String", "Coordinate", "Array"];
+// Representation options for RobTarget
+const repOptions = ["Cartesian", "Joint"];
+
+// DARK‐MODE background tokens
+const rowBgDark = {
+  "Variable (VAR)": "green.800",
+  "Constant (CONST)": "yellow.700",
+  "Work Object": "orange.800",
+  "Robot Target": "blue.700",
+};
 
 export default function VariableEditor({ variables, dispatch }) {
   const { joints } = useData();
 
-  // colors that adapt to light/dark
+  // page‐wide colors
   const bg = useColorModeValue("white", "gray.800");
   const borderColor = useColorModeValue("gray.200", "gray.600");
   const headerText = useColorModeValue("gray.600", "gray.400");
   const textColor = useColorModeValue("gray.800", "white");
 
+  // Add new variable
   const addVariable = () => {
     dispatch({
       type: "ADD_VARIABLE",
@@ -42,25 +52,31 @@ export default function VariableEditor({ variables, dispatch }) {
         name: "",
         type: "Constant (CONST)",
         dataType: "Number",
+        representation: "",
         value: "",
       },
     });
   };
 
   const updateVariable = useCallback(
-    (index, field, value) => {
-      dispatch({ type: "UPDATE_VARIABLE", index, payload: { [field]: value } });
-    },
+    (index, field, value) =>
+      dispatch({ type: "UPDATE_VARIABLE", index, payload: { [field]: value } }),
     [dispatch]
   );
-
   const removeVariable = useCallback(
-    (index) => {
-      dispatch({ type: "REMOVE_VARIABLE", index });
-    },
+    (index) => dispatch({ type: "REMOVE_VARIABLE", index }),
     [dispatch]
   );
-
+  const moveVariable = useCallback(
+    (from, to) => {
+      if (to < 0 || to >= variables.length) return;
+      const arr = [...variables];
+      const [v] = arr.splice(from, 1);
+      arr.splice(to, 0, v);
+      dispatch({ type: "REORDER_VARIABLES", payload: arr });
+    },
+    [variables, dispatch]
+  );
   const teachVariable = useCallback(
     (index) => {
       const v = variables[index];
@@ -68,11 +84,7 @@ export default function VariableEditor({ variables, dispatch }) {
         Array.isArray(joints) && joints.length === 6
           ? joints
           : [0, 0, 0, 0, 0, 0];
-
-      if (
-        v.type === "Robot Target" ||
-        v.type === "Work Object"
-      ) {
+      if (v.type === "Work Object" || v.type === "Robot Target") {
         const fmt = jointsArr.map((j) => +j.toFixed(3)).join(",");
         dispatch({
           type: "UPDATE_VARIABLE",
@@ -94,9 +106,9 @@ export default function VariableEditor({ variables, dispatch }) {
       overflowX="auto"
     >
       <VStack align="stretch" spacing={4}>
-        {/* title + add button */}
+        {/* Title + Add */}
         <Grid templateColumns="1fr auto" alignItems="center" mb={2}>
-          <Text fontSize="xl" fontWeight="bold" color={textColor}>
+          <Text fontSize="2xl" fontWeight="bold" color={textColor}>
             Declarations
           </Text>
           <Tooltip label="Add Variable" placement="top">
@@ -109,105 +121,162 @@ export default function VariableEditor({ variables, dispatch }) {
           </Tooltip>
         </Grid>
 
-        {/* header row */}
+        {/* Header row */}
         {variables.length > 0 && (
           <Grid
-            templateColumns="2fr 1.5fr 1.5fr 2fr auto auto"
+            templateColumns="2fr 1.5fr 1.5fr 1.5fr 2fr 1.5fr"
             gap={3}
             fontSize="sm"
             fontWeight="bold"
             color={headerText}
+            alignItems="center"
           >
             <Text>Name</Text>
             <Text>Category</Text>
-            <Text>Data Type</Text>
+            <Text>Data&nbsp;Type</Text>
+            <Text>Rep.</Text>
             <Text>Value</Text>
-            <Text textAlign="center">Teach</Text>
-            <Text textAlign="center">Delete</Text>
+            <Text textAlign="center">Actions</Text>
           </Grid>
         )}
 
-        {/* each variable */}
-        {variables.map((variable, i) => (
-          <Grid
-            key={i}
-            templateColumns="2fr 1.5fr 1.5fr 2fr auto auto"
-            gap={3}
-            alignItems="center"
-          >
-            <Input
-              size="sm"
-              placeholder="Name"
-              value={variable.name}
-              onChange={(e) => updateVariable(i, "name", e.target.value)}
-            />
+        {/* Each variable row */}
+        {variables.map((variable, i) => {
+          // pick correct bg for light/dark
+          const rowBg = rowBgDark[variable.type];
 
-            <Select
-              size="sm"
-              value={variable.type}
-              onChange={(e) => {
-                const newType = e.target.value;
-                updateVariable(i, "type", newType);
-                if (
-                  newType === "Work Object" ||
-                  newType === "Robot Target"
-                ) {
-                  updateVariable(i, "dataType", "Coordinate");
-                }
-              }}
+          return (
+            <Grid
+              key={i}
+              templateColumns="2fr 1.5fr 1.5fr 1.5fr 2fr 1.5fr"
+              gap={3}
+              alignItems="center"
+              bg={rowBg}
+              borderRadius="md"
+              p={2}
             >
-              {variableCategories.map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
-            </Select>
-
-            <Select
-              size="sm"
-              value={variable.dataType}
-              onChange={(e) => updateVariable(i, "dataType", e.target.value)}
-            >
-              {dataTypes.map((dt) => (
-                <option key={dt} value={dt}>
-                  {dt}
-                </option>
-              ))}
-            </Select>
-
-            <Input
-              size="sm"
-              placeholder="Value / Data"
-              value={variable.value}
-              onChange={(e) => updateVariable(i, "value", e.target.value)}
-            />
-
-            {(variable.type === "Work Object" ||
-              variable.type === "Robot Target") ? (
-              <Tooltip label="Teach current robot position (Move Tab)" placement="top">
-                <Button
-                  size="sm"
-                  colorScheme="primary"
-                  onClick={() => teachVariable(i)}
-                >
-                  Teach
-                </Button>
-              </Tooltip>
-            ) : (
-              <Box />
-            )}
-
-            <Tooltip label="Remove Variable" placement="top">
-              <IconButton
+              {/* Name */}
+              <Input
                 size="sm"
-                colorScheme="red"
-                icon={<FiTrash2 />}
-                onClick={() => removeVariable(i)}
-                aria-label="Remove Variable"
+                w="100%"
+                placeholder="Name"
+                value={variable.name}
+                onChange={(e) => updateVariable(i, "name", e.target.value)}
               />
-            </Tooltip>
-          </Grid>
-        ))}
+
+              {/* Category */}
+              <Select
+                size="sm"
+                w="100%"
+                value={variable.type}
+                onChange={(e) => {
+                  const t = e.target.value;
+                  updateVariable(i, "type", t);
+                  if (t === "Robot Target") {
+                    updateVariable(i, "representation", "Cartesian");
+                    updateVariable(i, "dataType", "Coordinate");
+                  } else {
+                    updateVariable(i, "representation", "");
+                  }
+                  if (t === "Work Object") {
+                    updateVariable(i, "dataType", "Coordinate");
+                  }
+                }}
+              >
+                {variableCategories.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </Select>
+
+              {/* Data Type */}
+              <Select
+                size="sm"
+                w="100%"
+                value={variable.dataType}
+                onChange={(e) =>
+                  updateVariable(i, "dataType", e.target.value)
+                }
+              >
+                {dataTypes.map((dt) => (
+                  <option key={dt} value={dt}>
+                    {dt}
+                  </option>
+                ))}
+              </Select>
+
+              {/* Representation */}
+              {variable.type === "Robot Target" ? (
+                <Select
+                  size="sm"
+                  w="100%"
+                  value={variable.representation}
+                  onChange={(e) =>
+                    updateVariable(i, "representation", e.target.value)
+                  }
+                >
+                  {repOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <Box />
+              )}
+
+              {/* Value */}
+              <Input
+                size="sm"
+                w="100%"
+                placeholder="Value / Data"
+                value={variable.value}
+                onChange={(e) => updateVariable(i, "value", e.target.value)}
+              />
+
+              {/* Actions */}
+              <Box display="flex" justifyContent="end" gap={1}>
+                <Tooltip label="Move Up">
+                  <IconButton
+                    size="sm"
+                    icon={<FiChevronUp />}
+                    onClick={() => moveVariable(i, i - 1)}
+                    aria-label="Move Up"
+                  />
+                </Tooltip>
+                <Tooltip label="Move Down">
+                  <IconButton
+                    size="sm"
+                    icon={<FiChevronDown />}
+                    onClick={() => moveVariable(i, i + 1)}
+                    aria-label="Move Down"
+                  />
+                </Tooltip>
+                {["Work Object", "Robot Target"].includes(variable.type) && (
+                  <Tooltip label="Teach position">
+                    <Button
+                      size="sm"
+                      colorScheme="primary"
+                      onClick={() => teachVariable(i)}
+                    >
+                      Teach
+                    </Button>
+                  </Tooltip>
+                )}
+                <Tooltip label="Remove">
+                  <IconButton
+                    size="sm"
+                    colorScheme="red"
+                    icon={<FiTrash2 />}
+                    onClick={() => removeVariable(i)}
+                    aria-label="Remove"
+                  />
+                </Tooltip>
+              </Box>
+            </Grid>
+          );
+        })}
       </VStack>
     </Box>
   );

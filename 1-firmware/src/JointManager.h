@@ -1,73 +1,80 @@
+// JointManager.h
+
 #ifndef JOINT_MANAGER_H
 #define JOINT_MANAGER_H
 
-#include <Arduino.h>
-#include <AccelStepper.h>
+#include <cstddef>
+#include <cmath>
 #include "Config.h"
 #include "ConfigManager.h"
 #include "SafetyManager.h"
+#include "StepperManager.h"
 
-static constexpr int CONTROL_HZ = 1000; // for logging frequency
+struct JointCache
+{
+  float cfgMin;
+  float cfgMax;
+  float cfgHomeOffset;
+  float cfgFactor;
+  float cfgMaxSpeed;
+  float cfgMaxAccel;
+  float stepsPerPhysDeg;
+  bool dirty;
+};
 
 class JointManager
 {
 public:
   static JointManager &instance();
+
+  /// Call once in setup();
   void begin();
-  /// Call this from your main loop to step all motors
-  void updateSteppers();
 
-  // ─── motion APIs ────────────────────────────────────────────
-  bool moveTo(size_t j, float targetDeg, float speed, float accel);
-  bool moveBy(size_t j, float deltaDeg, float speed, float accel);
-  bool jogJoint(size_t j, float degPerSec);
-  void stopJoint(size_t j);
+  /// Move joint #[0…5] to targetDeg (°) with vMax (°/s) and aMax (°/s²)
+  bool move(size_t joint,
+            float targetDeg,
+            float vMaxDegPerSec,
+            float aMaxDegPerSec2);
+
+  /// Start jogging joint # with signed speed (°/s) and accel (°/s²)
+  bool jog(size_t joint,
+           float targetDegPerSec,
+           float accelDegPerSec2);
+
+  /// Stop any jog on that joint immediately
+  void stopJog(size_t joint);
+
+  /// Emergency‐stop everything
   void stopAll();
-  bool isMoving(size_t j);
+
+  /// Queries
+  bool isMoving(size_t joint = 0);
   bool isAnyMoving();
-  bool allJointsNearTarget(long thresholdSteps);
+  bool allJointsNearTarget(long thresholdSteps = 0);
 
+  /// Position control
+  void resetPosition(size_t joint, float newDeg);
+  float getPosition(size_t joint);
+  float getTarget(size_t joint); // always NaN
+  float getSpeed(size_t joint);  // always 0
+  float getAccel(size_t joint);  // always 0
 
-  // ─── low-level run ──────────────────────────────────────────
-  bool runJoint(size_t j,
-                float targetDeg,
-                float maxDps,
-                float accelDps2,
-                bool clampTarget = true);
+  /// Soft limits
+  void setSoftLimits(size_t joint, float minDeg, float maxDeg);
+  void getSoftLimits(size_t joint, float &minDeg, float &maxDeg);
 
-  // ─── queries ────────────────────────────────────────────────
-  float getPosition(size_t j); // real°
-  float getTarget(size_t j);   // real° (NaN in jog mode)
-  float getSpeed(size_t j);    // °/s
-  float getAccel(size_t j);    // °/s²
-
-  void resetPosition(size_t j, float deg);
-
-  // ─── soft limits ────────────────────────────────────────────
-  void setSoftLimits(size_t j, float minDeg, float maxDeg);
-  void getSoftLimits(size_t j, float &minDeg, float &maxDeg) const;
-
-  // ─── tuning ─────────────────────────────────────────────────
-  void setMaxSpeed(size_t j, float maxDps);
-  float getMaxSpeed(size_t j) const;
-  void setMaxAccel(size_t j, float maxDps2);
-  float getMaxAccel(size_t j) const;
-
-  // ─── logging ───────────────────────────────────────────────
-  void startLogging(size_t j, unsigned long intervalMs = 100);
-  void stopLogging();
-  void handleLogging();
-
-  AccelStepper steppers[CONFIG_JOINT_COUNT];
+  /// Tuning
+  void setMaxSpeed(size_t joint, float maxDegPerSec);
+  float getMaxSpeed(size_t joint);
+  void setMaxAccel(size_t joint, float maxDegPerSec2);
+  float getMaxAccel(size_t joint);
 
 private:
   JointManager();
-  bool jogMode[CONFIG_JOINT_COUNT] = {false};
+  void _reloadCache(size_t joint);
+  float _stepsPerDeg(size_t joint) const;
 
-  size_t logJoint = SIZE_MAX;
-  unsigned long logInterval = 0, lastLogMs = 0;
-
-  float stepsPerDeg(size_t j) const;
+  JointCache _cache[CONFIG_JOINT_COUNT];
 };
 
 #endif // JOINT_MANAGER_H

@@ -22,7 +22,7 @@ export default function SettingsTab() {
 
   useEffect(() => {
     listParameters();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -30,6 +30,17 @@ export default function SettingsTab() {
       setLocal(parameters);
     }
   }, [parameters]);
+
+  const handleRestart = () => {
+    restartTeensy();  // emits command once
+    setLocal({});     // clear local params state
+    toast({ title: "Teensy restarting...", status: "info", duration: 1500 });
+
+    // Wait briefly to allow the restart command to send, then refresh parameters after reconnect
+    setTimeout(() => {
+      listParameters();
+    }, 2000);
+  };
 
   const handleChange = (key, raw) => {
     const val = raw === "" || isNaN(raw) ? raw : parseFloat(raw);
@@ -48,7 +59,7 @@ export default function SettingsTab() {
     return (
       <Box p={6}>
         <Text>Loading settings…</Text>
-        <Button mt={4} colorScheme="red" onClick={restartTeensy}>
+        <Button mt={4} colorScheme="red" onClick={handleRestart}>
           Restart Teensy
         </Button>
       </Box>
@@ -65,22 +76,22 @@ export default function SettingsTab() {
     }
   });
 
-  const jointNames = Object.keys(groups).sort((a,b)=>
-    parseInt(a.replace("joint","")) - parseInt(b.replace("joint",""))
+  const jointNames = Object.keys(groups).sort((a, b) =>
+    parseInt(a.replace("joint", "")) - parseInt(b.replace("joint", ""))
   );
 
   return (
     <Box p={6} overflowY="auto">
       <Text fontSize="2xl" fontWeight="bold" mb={6}>Joint Parameters</Text>
-      <Button onClick={restartTeensy} colorScheme="red" size="md" mb={6}>
+      <Button onClick={handleRestart} colorScheme="red" size="md" mb={6}>
         Restart Teensy
       </Button>
 
-      <SimpleGrid columns={[1,2,3]} spacing={4}>
+      <SimpleGrid columns={[1, 2, 3]} spacing={4}>
         {jointNames.map(grp => (
           <Box key={grp} borderWidth="1px" borderRadius="md" p={4} shadow="sm" bg='gray.700'>
             <Text fontSize="lg" fontWeight="semibold" mb={3}>
-              Joint {grp.replace("joint","")}
+              Joint {grp.replace("joint", "")}
             </Text>
             <VStack spacing={3} align="stretch">
               {groups[grp].map(key => (

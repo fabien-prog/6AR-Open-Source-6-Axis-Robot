@@ -1,5 +1,6 @@
 // src/components/MainPage.jsx
-import React, { useState } from "react";
+
+import React, { useState, useEffect } from "react";
 import {
   Box,
   Flex,
@@ -31,8 +32,15 @@ const MainPage = () => {
 
   const [view, setView] = useState("robot");  // "robot" | "program" | "run"
 
+  // Listen for the one-click round-trip event
+  useEffect(() => {
+    const handler = () => setView("run");
+    window.addEventListener("switchToRunTab", handler);
+    return () => window.removeEventListener("switchToRunTab", handler);
+  }, []);
+
   const headerBg = useColorModeValue("white", "gray.700");
-  const panelBg  = useColorModeValue("white", "gray.700");
+  const panelBg = useColorModeValue("white", "gray.700");
 
   return (
     <Flex direction="column" h="100vh" overflow="hidden" bg={useColorModeValue("gray.50", "gray.900")}>
@@ -76,11 +84,11 @@ const MainPage = () => {
             {connected ? "Online" : "Offline"}
           </Tag>
           <Tag size="sm" colorScheme="whiteAlpha">Status: {systemStatus}</Tag>
-          <Tag size="sm" colorScheme="whiteAlpha">Uptime: {Math.floor(elapsedTime/1000)}s</Tag>
-          <Button size="sm" leftIcon={<Icon as={PiSlidersHorizontalBold}/>} onClick={onOpen}>
+          <Tag size="sm" colorScheme="whiteAlpha">Uptime: {Math.floor(elapsedTime / 1000)}s</Tag>
+          <Button size="sm" leftIcon={<Icon as={PiSlidersHorizontalBold} />} onClick={onOpen}>
             Settings
           </Button>
-          <Button size="sm" colorScheme="red" leftIcon={<Icon as={PiWarningCircleBold}/>} onClick={stopAll}>
+          <Button size="sm" colorScheme="red" leftIcon={<Icon as={PiWarningCircleBold} />} onClick={stopAll}>
             E-Stop
           </Button>
         </HStack>

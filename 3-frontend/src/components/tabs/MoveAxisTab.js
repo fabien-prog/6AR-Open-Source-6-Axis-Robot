@@ -8,6 +8,7 @@ import {
   Button, HStack, InputGroup, InputRightAddon,
   SimpleGrid, useColorModeValue, useToast,
   Stat, StatLabel, StatNumber, Progress, Text,
+  Slider, SliderTrack, SliderFilledTrack, SliderThumb,
 } from "@chakra-ui/react";
 import * as THREE from "three";
 import RobotLoader from "../Main/RobotLoader";
@@ -17,6 +18,7 @@ import AddStlModal from "../modals/AddSTLModal";
 export default function MoveAxisTab() {
   const {
     socket,
+    getAllJointStatus,
     ikRequest,
     joints,
     fkPosition = [],
@@ -24,6 +26,8 @@ export default function MoveAxisTab() {
     linearMove,         // ← streaming API
     profileLinear,      // ← batched API (no-ack, we listen for response events)
     setIsMoving,        // ← toggle global “moving” flag
+    moveMultiple,
+    parameters,
   } = useData();
 
   const toast = useToast();
@@ -47,6 +51,8 @@ export default function MoveAxisTab() {
   const [lmSpeed, setLmSpeed] = useState("0.1");
   const [lmAccel, setLmAccel] = useState("0.1");
 
+  const debounceTimer = useRef(null);
+
   // — Extras, joint state, simulation flags —
   const [extras, setExtras] = useState([]);
   const [poseJoints, setPoseJoints] = useState(joints);
@@ -58,7 +64,7 @@ export default function MoveAxisTab() {
   // refs for profile playback
   const profileRef = useRef({ positions: [], idx: 0, timer: null, dt: 0, final: [] });
 
-  // seed pose-editor from FK once
+  // seed pose‐editor from FK once
   useEffect(() => {
     if (initialSync.current) { initialSync.current = false; return; }
     if (fkPosition.length === 3) {
@@ -68,9 +74,9 @@ export default function MoveAxisTab() {
     }
     if (fkOrientation.length === 3 && fkOrientation.every(r => Array.isArray(r))) {
       const m = new THREE.Matrix4().set(
-        ...fkOrientation[0], 0,
-        ...fkOrientation[1], 0,
-        ...fkOrientation[2], 0,
+        fkOrientation[0][0], fkOrientation[0][1], fkOrientation[0][2], 0,
+        fkOrientation[1][0], fkOrientation[1][1], fkOrientation[1][2], 0,
+        fkOrientation[2][0], fkOrientation[2][1], fkOrientation[2][2], 0,
         0, 0, 0, 1
       );
       const e = new THREE.Euler().setFromRotationMatrix(m, "XYZ");
@@ -93,9 +99,17 @@ export default function MoveAxisTab() {
     const q = new THREE.Quaternion().setFromEuler(e);
     ikRequest([x / 1000, y / 1000, z / 1000], [q.x, q.y, q.z, q.w]);
   }, [posX, posY, posZ, angA, angB, angC, ikRequest]);
-  useEffect(applyPose, [applyPose]);
 
-  // IK replies ⇒ poseJoints
+  // schedule IK 500ms after last change
+  const scheduleApplyPose = useCallback(() => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = window.setTimeout(() => {
+      applyPose();
+      debounceTimer.current = null;
+    }, 50);
+  }, [applyPose]);
+
+  // IK replies ⇒ update virtual pose
   useEffect(() => {
     if (!socket) return;
     const onIk = msg => {
@@ -130,6 +144,7 @@ export default function MoveAxisTab() {
       accel: parseFloat(lmAccel),
     });
   };
+
   useEffect(() => {
     if (!socket) return;
     const onAngles = angles => {
@@ -252,16 +267,67 @@ export default function MoveAxisTab() {
     };
   }, [socket, toast, setIsMoving]);
 
-  // jog helpers...
-  const jogPos = (axis, d) => {
-    const map = { X: setPosX, Y: setPosY, Z: setPosZ };
-    const cur = parseFloat({ X: posX, Y: posY, Z: posZ }[axis]) || 0;
-    map[axis]((cur + d).toFixed(axis === "Z" ? 3 : 3));
-  };
-  const jogAng = (axis, d) => {
-    const map = { A: setAngA, B: setAngB, C: setAngC };
-    const cur = parseFloat({ A: angA, B: angB, C: angC }[axis]) || 0;
-    map[axis]((cur + d).toFixed(1));
+  const movePhysicalToVirtual = async () => {
+    // returns Array<{ joint, position, velocity, acceleration, target }>
+    const statuses = await getAllJointStatus();
+
+    if (!Array.isArray(statuses) || statuses.length !== 6) {
+      toast({ title: "Failed to get joint status", status: "error" });
+      return;
+    }
+
+    // extract positions from the fresh array
+    const initialPositions = statuses.map(j => j.position);
+    const finalPositions = poseJoints || [];
+
+    const jointsIdx = finalPositions.map((_, i) => i + 1);
+    const deltas = finalPositions.map((t, i) => Math.abs(t - initialPositions[i]));
+
+    const baseSpeeds = jointsIdx.map(j => (parameters[`joint${j}.maxSpeed`] ?? 0) / 3);
+    const baseAccels = jointsIdx.map(j => (parameters[`joint${j}.maxAccel`] ?? 0) / 3);
+
+    // trapezoidal sync logic (as before)…
+    const trapezoidalTime = (delta, vmax, amax) => {
+      const tA = vmax / amax;
+      const xA = 0.5 * amax * tA * tA;
+      if (delta < 2 * xA) return 2 * Math.sqrt(delta / amax);
+      const xC = delta - 2 * xA;
+      return 2 * tA + (xC / vmax);
+    };
+
+    const travelTimes = deltas.map((d, i) => trapezoidalTime(d, baseSpeeds[i], baseAccels[i]));
+    const syncTime = Math.max(...travelTimes, 0.01);
+
+    const syncProfiles = deltas.map((d, i) => {
+      const amax = baseAccels[i];
+      let vmax;
+
+      // decide triangular vs trapezoidal
+      const tAmax = syncTime / 2;
+      const xAmax = 0.5 * amax * tAmax * tAmax;
+      if (d < 2 * xAmax) {
+        vmax = Math.sqrt(d * amax);
+      } else {
+        const disc = amax * amax * syncTime * syncTime - 4 * amax * d;
+        vmax = disc < 0
+          ? amax * tAmax
+          : (amax * syncTime - Math.sqrt(disc)) / 2;
+      }
+
+      vmax = Math.min(vmax, baseSpeeds[i]);
+      const aSync = vmax / (syncTime / 2);
+
+      return { vmax, aSync };
+    });
+
+    const round4 = v => Math.round(v * 10000) / 10000;
+
+    moveMultiple(
+      jointsIdx,
+      finalPositions.map(round4),
+      syncProfiles.map(p => round4(Math.max(0.1, p.vmax))),
+      syncProfiles.map(p => round4(Math.max(0.1, p.aSync)))
+    );
   };
 
   const handleAddExtra = e => setExtras(es => [...es, e]);
@@ -286,38 +352,88 @@ export default function MoveAxisTab() {
         <Box bg={cardBg} p={3} rounded="xl" border="1px solid" borderColor={border} shadow="sm">
           <Heading size="lg" mb={2}>Pose Editor Simulation</Heading>
           <SimpleGrid columns={2} spacing={2}>
-            {["X", "Y", "Z"].map(ax => (
-              <FormControl key={ax}>
-                <FormLabel>{ax} (mm)</FormLabel>
-                <HStack spacing={1}>
-                  <Button size="sm" onClick={() => jogPos(ax, -10)}>−10</Button>
-                  <InputGroup size="sm">
-                    <NumberInput
-                      value={{ X: posX, Y: posY, Z: posZ }[ax]}
-                      onChange={v => ({ X: setPosX, Y: setPosY, Z: setPosZ }[ax](v))}
-                    ><NumberInputField /><NumberInputStepper><NumberIncrementStepper /><NumberDecrementStepper /></NumberInputStepper></NumberInput>
-                    <InputRightAddon w="50px">mm</InputRightAddon>
-                  </InputGroup>
-                  <Button size="sm" onClick={() => jogPos(ax, 10)}>+10</Button>
-                </HStack>
-              </FormControl>
-            ))}
-            {["A", "B", "C"].map(ax => (
-              <FormControl key={ax}>
-                <FormLabel>{ax} (°)</FormLabel>
-                <HStack spacing={1}>
-                  <Button size="sm" onClick={() => jogAng(ax, -2)}>−2°</Button>
-                  <InputGroup size="sm">
-                    <NumberInput step={0.1}
-                      value={{ A: angA, B: angB, C: angC }[ax]}
-                      onChange={v => ({ A: setAngA, B: setAngB, C: setAngC }[ax](v))}
-                    ><NumberInputField /><NumberInputStepper><NumberIncrementStepper /><NumberDecrementStepper /></NumberInputStepper></NumberInput>
-                    <InputRightAddon w="50px">°</InputRightAddon>
-                  </InputGroup>
-                  <Button size="sm" onClick={() => jogAng(ax, 2)}>+2°</Button>
-                </HStack>
-              </FormControl>
-            ))}
+            {["X", "Y", "Z"].map((ax, i) => {
+              const state = { X: posX, Y: posY, Z: posZ };
+              const setter = { X: setPosX, Y: setPosY, Z: setPosZ };
+              return (
+                <Box bg="gray.700" p={3} rounded="xl" border="1px solid" borderColor={border} key={ax}>
+                  <FormControl key={ax}>
+                    <FormLabel>{ax} (mm)</FormLabel>
+                    <HStack spacing={1}>
+                      <Button size="sm" onClick={() => { setter[ax]((parseFloat(state[ax]) - 10).toFixed(3)); scheduleApplyPose(); }}>−10</Button>
+                      <InputGroup size="sm">
+                        <NumberInput
+                          value={state[ax]}
+                          onChange={v => { setter[ax](v); scheduleApplyPose(); }}
+                        >
+                          <NumberInputField />
+                          <NumberInputStepper>
+                            <NumberIncrementStepper />
+                            <NumberDecrementStepper />
+                          </NumberInputStepper>
+                        </NumberInput>
+                        <InputRightAddon w="50px">mm</InputRightAddon>
+                      </InputGroup>
+                      <Button size="sm" onClick={() => { setter[ax]((parseFloat(state[ax]) + 10).toFixed(3)); scheduleApplyPose(); }}>+10</Button>
+                    </HStack>
+                    {/* Slider */}
+                    <Slider
+                      mt={2}
+                      min={-1000}
+                      max={1000}
+                      step={1}
+                      value={parseFloat(state[ax])}
+                      onChange={v => { setter[ax](v.toFixed(3)); scheduleApplyPose(); }}
+                    >
+                      <SliderTrack><SliderFilledTrack /></SliderTrack>
+                      <SliderThumb />
+                    </Slider>
+                  </FormControl>
+                </Box>
+              );
+            })}
+
+            {["A", "B", "C"].map((ax, i) => {
+              const state = { A: angA, B: angB, C: angC };
+              const setter = { A: setAngA, B: setAngB, C: setAngC };
+              return (
+                <Box bg="gray.700" p={3} rounded="xl" border="1px solid" borderColor={border} key={ax}>
+                  <FormControl key={ax}>
+                    <FormLabel>{ax} (°)</FormLabel>
+                    <HStack spacing={1}>
+                      <Button size="sm" onClick={() => { setter[ax]((parseFloat(state[ax]) - 2).toFixed(1)); scheduleApplyPose(); }}>−2°</Button>
+                      <InputGroup size="sm">
+                        <NumberInput
+                          step={0.1}
+                          value={state[ax]}
+                          onChange={v => { setter[ax](v); scheduleApplyPose(); }}
+                        >
+                          <NumberInputField />
+                          <NumberInputStepper>
+                            <NumberIncrementStepper />
+                            <NumberDecrementStepper />
+                          </NumberInputStepper>
+                        </NumberInput>
+                        <InputRightAddon w="50px">°</InputRightAddon>
+                      </InputGroup>
+                      <Button size="sm" onClick={() => { setter[ax]((parseFloat(state[ax]) + 2).toFixed(1)); scheduleApplyPose(); }}>+2°</Button>
+                    </HStack>
+                    {/* Slider */}
+                    <Slider
+                      mt={2}
+                      min={-180}
+                      max={180}
+                      step={1}
+                      value={parseFloat(state[ax])}
+                      onChange={v => { setter[ax](v.toFixed(1)); scheduleApplyPose(); }}
+                    >
+                      <SliderTrack><SliderFilledTrack /></SliderTrack>
+                      <SliderThumb />
+                    </Slider>
+                  </FormControl>
+                </Box>
+              );
+            })}
           </SimpleGrid>
         </Box>
 
@@ -426,6 +542,13 @@ export default function MoveAxisTab() {
               );
             })}
           </SimpleGrid>
+          <Button
+            mt={4}
+            colorScheme="primary"
+            onClick={movePhysicalToVirtual}
+          >
+            Move physical robot to virtual joint positions
+          </Button>
         </Box>
 
       </Grid>

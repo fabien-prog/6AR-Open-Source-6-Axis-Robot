@@ -48,7 +48,6 @@ export default function RobotActionsTab() {
         parameters,
         listParameters,
         abortHoming,
-        linearMoveToTeensy,
         socket,
         setIsMoving,
     } = useData();
@@ -166,8 +165,39 @@ export default function RobotActionsTab() {
         const speed = parseFloat(linSpeed) / 1000;
         const accel = parseFloat(linAccel) / 1000;
         const quat = eulerToQuat(...linEuler);
-        const pos = linPos.map((v) => v / 1000);
-        linearMoveToTeensy(pos, quat, speed, 45, accel);
+        const pos = linPos.map(v => v / 1000);
+
+        // This actually fires the mutation → socket.emit under the hood
+        socket.emit("linearMoveToTeensy", {
+            position: pos,
+            quaternion: quat,
+            speed,
+            angular_speed_deg: 45,
+            accel,
+        });
+    };
+
+    const handleVelocityProfileMove = () => {
+        const speed = parseFloat(linSpeed) / 1000;
+        const accel = parseFloat(linAccel) / 1000;
+        const quat = eulerToQuat(...linEuler);
+        const pos = linPos.map(v => v / 1000);
+
+        console.log("→ raw socket.emit('profileMoveToTeensy')", {
+            position: pos,
+            quaternion: quat,
+            speed,
+            angular_speed_deg: 45,
+            accel,
+        }, " socket:", socket, "connected?", socket?.connected);
+
+        socket.emit("profileMoveToTeensy", {
+            position: pos,
+            quaternion: quat,
+            speed,
+            angular_speed_deg: 45,
+            accel,
+        });
     };
 
     const handleMultiChange = (idx, field, val) =>
@@ -203,10 +233,10 @@ export default function RobotActionsTab() {
                 </FormControl>
             </HStack>
 
-            <Accordion allowMultiple defaultIndex={[0]}>
+            <Accordion allowMultiple>
                 {/* Homing */}
-                <AccordionItem border="1px solid" borderColor={border} mb={2}>
-                    <AccordionButton _expanded={{ bg: "primary.600" }}>
+                <AccordionItem border="1px solid" bg='gray.700' borderColor={border} mb={2}>
+                    <AccordionButton _expanded={{ bg: "cyan.600" }}>
                         <Box flex="1" textAlign="left" display="flex" alignItems="center">
                             <Icon as={PiHouseLine} mr={2} boxSize='18px' /> Joint Calibration
                         </Box>
@@ -237,37 +267,47 @@ export default function RobotActionsTab() {
                                 colorScheme="cyan"
                                 onClick={() => home(joint, +fastSpd, +slowSpd)}
                             >
-                                Start
+                                Start Homing J{joint}
                             </Button>
-                            <Button size="sm" colorScheme="yellow" onClick={abortHoming}>
-                                Abort
+                            <Button size="sm" colorScheme="cyan" variant='outline' onClick={homeAll}>
+                                Home All Axes Sequentially
                             </Button>
-                            <Button size="sm" colorScheme="purple" onClick={homeAll}>
-                                All Axes
+                            <Button size="sm" colorScheme="cyan" variant='outline' onClick={abortHoming}>
+                                Abort Homing
                             </Button>
                         </HStack>
                     </AccordionPanel>
                 </AccordionItem>
 
                 {/* Status */}
-                <AccordionItem border="1px solid" borderColor={border} mb={2}>
-                    <AccordionButton _expanded={{ bg: "primary.600" }}>
+                <AccordionItem border="1px solid" bg='gray.700' borderColor={border} mb={2}>
+                    <AccordionButton _expanded={{ bg: "primary.700" }}>
                         <Box flex="1" textAlign="left" display="flex" alignItems="center">
                             <Icon as={PiQuestion} mr={2} boxSize='18px' /> Status
                         </Box>
+                        <Button
+                            size="xs"
+                            colorScheme="blue"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                getAllJointStatus()
+                            }}
+                        >
+                            Refresh
+                        </Button>
                         <AccordionIcon />
                     </AccordionButton>
                     <AccordionPanel bg={panelBg} p={4}>
                         <HStack spacing={2} mb={3}>
                             <Button
                                 size="sm"
-                                colorScheme={liveUpdate ? "red" : "green"}
+                                colorScheme={liveUpdate ? "red" : "primary"}
                                 onClick={() => setLiveUpdate(!liveUpdate)}
                             >
-                                {liveUpdate ? "Stop Live" : "Start Live"}
+                                {liveUpdate ? "Stop Live Refresh" : "Start Live Refresh"}
                             </Button>
-                            <Button size="sm" colorScheme="blue" onClick={getAllJointStatus}>
-                                Refresh
+                            <Button size="sm" colorScheme="primary" onClick={getAllJointStatus}>
+                                Single Refresh
                             </Button>
                         </HStack>
                         <Box overflowX="auto">
@@ -288,7 +328,8 @@ export default function RobotActionsTab() {
                                             <Td isNumeric>{js.position.toFixed(1)}</Td>
                                             <Td isNumeric>{js.velocity.toFixed(1)}</Td>
                                             <Td isNumeric>{js.acceleration.toFixed(1)}</Td>
-                                            <Td isNumeric>{js.target.toFixed(1)}</Td>
+                                            <Td isNumeric>{js.target != null ? js.target.toFixed(1) : '—'}
+                                            </Td>
                                         </Tr>
                                     ))}
                                 </Tbody>
@@ -297,161 +338,9 @@ export default function RobotActionsTab() {
                     </AccordionPanel>
                 </AccordionItem>
 
-                {/* Absolute Move */}
-                <AccordionItem border="1px solid" borderColor={border} mb={2}>
-                    <AccordionButton _expanded={{ bg: "primary.600" }}>
-                        <Box flex="1" textAlign="left" display="flex" alignItems="center">
-                            <Icon as={PiCursorText} mr={2} boxSize='18px' /> Absolute Move
-                        </Box>
-                        <AccordionIcon />
-                    </AccordionButton>
-                    <AccordionPanel bg={panelBg} p={4}>
-                        <SimpleGrid columns={[1, 3]} spacing={3} mb={3}>
-                            <FormControl>
-                                <FormLabel fontSize="sm">Target (°)</FormLabel>
-                                <Input
-                                    size="sm"
-                                    value={tgt}
-                                    onChange={(e) => setTgt(e.target.value)}
-                                />
-                            </FormControl>
-                            <FormControl>
-                                <FormLabel fontSize="sm">Speed (°/s)</FormLabel>
-                                <Input
-                                    size="sm"
-                                    value={spd}
-                                    onChange={(e) => setSpd(e.target.value)}
-                                />
-                            </FormControl>
-                            <FormControl>
-                                <FormLabel fontSize="sm">Accel (°/s²)</FormLabel>
-                                <Input
-                                    size="sm"
-                                    value={acc}
-                                    onChange={(e) => setAcc(e.target.value)}
-                                />
-                            </FormControl>
-                        </SimpleGrid>
-                        <Button
-                            size="sm"
-                            colorScheme="primary"
-                            onClick={() => moveTo(joint, +tgt, +spd, +acc)}
-                        >
-                            Execute
-                        </Button>
-                    </AccordionPanel>
-                </AccordionItem>
-
-                {/* Relative Move */}
-                <AccordionItem border="1px solid" borderColor={border} mb={2}>
-                    <AccordionButton _expanded={{ bg: "primary.600" }}>
-                        <Box flex="1" textAlign="left" display="flex" alignItems="center">
-                            <Icon as={PiRepeat} mr={2} boxSize='18px' /> Relative Move
-                        </Box>
-                        <AccordionIcon />
-                    </AccordionButton>
-                    <AccordionPanel bg={panelBg} p={4}>
-                        <SimpleGrid columns={[1, 3]} spacing={3} mb={3}>
-                            <FormControl>
-                                <FormLabel fontSize="sm">Δ (°)</FormLabel>
-                                <Input
-                                    size="sm"
-                                    value={delta}
-                                    onChange={(e) => setDelta(e.target.value)}
-                                />
-                            </FormControl>
-                            <FormControl>
-                                <FormLabel fontSize="sm">Speed (°/s)</FormLabel>
-                                <Input
-                                    size="sm"
-                                    value={spdBy}
-                                    onChange={(e) => setSpdBy(e.target.value)}
-                                />
-                            </FormControl>
-                            <FormControl>
-                                <FormLabel fontSize="sm">Accel (°/s²)</FormLabel>
-                                <Input
-                                    size="sm"
-                                    value={accBy}
-                                    onChange={(e) => setAccBy(e.target.value)}
-                                />
-                            </FormControl>
-                        </SimpleGrid>
-                        <Button
-                            size="sm"
-                            colorScheme="green"
-                            onClick={() => moveBy(joint, +delta, +spdBy, +accBy)}
-                        >
-                            Execute
-                        </Button>
-                    </AccordionPanel>
-                </AccordionItem>
-
-                {/* Multi-Joint Move */}
-                <AccordionItem border="1px solid" borderColor={border} mb={2}>
-                    <AccordionButton _expanded={{ bg: "primary.600" }}>
-                        <Box flex="1" textAlign="left" display="flex" alignItems="center">
-                            <Icon as={PiArrowsHorizontal} mr={2} boxSize='18px' /> Absolute Move Multiple
-                        </Box>
-                        <AccordionIcon />
-                    </AccordionButton>
-                    <AccordionPanel bg={panelBg} p={4}>
-                        <VStack spacing={2} mb={3}>
-                            {multiParams.map((p, i) => (
-                                <HStack key={i} spacing={2}>
-                                    <Text w="25px">J{i + 1}</Text>
-                                    <Input
-                                        size="xs"
-                                        placeholder="Tgt"
-                                        value={p.target}
-                                        onChange={(e) =>
-                                            handleMultiChange(i, "target", e.target.value)
-                                        }
-                                    />
-                                    <Input
-                                        size="xs"
-                                        placeholder="Spd"
-                                        value={p.speed}
-                                        onChange={(e) =>
-                                            handleMultiChange(i, "speed", e.target.value)
-                                        }
-                                    />
-                                    <Input
-                                        size="xs"
-                                        placeholder="Acc"
-                                        value={p.accel}
-                                        onChange={(e) =>
-                                            handleMultiChange(i, "accel", e.target.value)
-                                        }
-                                    />
-                                </HStack>
-                            ))}
-                        </VStack>
-                        <Button
-                            size="sm"
-                            colorScheme="purple"
-                            onClick={() => {
-                                const js = [], ts = [], ss = [], as = [];
-                                multiParams.forEach((p, idx) => {
-                                    const t = parseFloat(p.target);
-                                    if (!isNaN(t)) {
-                                        js.push(idx + 1);
-                                        ts.push(t);
-                                        ss.push(parseFloat(p.speed) || 0);
-                                        as.push(parseFloat(p.accel) || 0);
-                                    }
-                                });
-                                moveMultiple(js, ts, ss, as);
-                            }}
-                        >
-                            Execute
-                        </Button>
-                    </AccordionPanel>
-                </AccordionItem>
-
                 {/* Linear MoveToTeensy */}
-                <AccordionItem border="1px solid" borderColor={border} mb={2}>
-                    <AccordionButton _expanded={{ bg: "primary.600" }}>
+                <AccordionItem border="1px solid" bg='gray.700' borderColor={border} mb={2}>
+                    <AccordionButton _expanded={{ bg: "orange.600" }}>
                         <Box flex="1" textAlign="left" display="flex" alignItems="center">
                             <Icon as={PiArrowsHorizontal} mr={2} boxSize='18px' /> Cartesian Linear Move
                         </Box>
@@ -521,8 +410,163 @@ export default function RobotActionsTab() {
                                 />
                             </FormControl>
                         </HStack>
-                        <Button size="sm" colorScheme="blue" onClick={handleLinearMove}>
-                            Execute Movement
+                        <Button size="sm" colorScheme="gray" onClick={handleLinearMove}>
+                            Execute Interpolated Move
+                        </Button>
+                        <Button ml={2} size="sm" colorScheme="orange" onClick={handleVelocityProfileMove}>
+                            Execute Velocity Profile Move
+                        </Button>
+                    </AccordionPanel>
+                </AccordionItem>
+
+                {/* Absolute Move */}
+                <AccordionItem border="1px solid" bg='gray.700' borderColor={border} mb={2}>
+                    <AccordionButton _expanded={{ bg: "yellow.500" }}>
+                        <Box flex="1" textAlign="left" display="flex" alignItems="center">
+                            <Icon as={PiCursorText} mr={2} boxSize='18px' /> Absolute Move
+                        </Box>
+                        <AccordionIcon />
+                    </AccordionButton>
+                    <AccordionPanel bg={panelBg} p={4}>
+                        <SimpleGrid columns={[1, 3]} spacing={3} mb={3}>
+                            <FormControl>
+                                <FormLabel fontSize="sm">Target (°)</FormLabel>
+                                <Input
+                                    size="sm"
+                                    value={tgt}
+                                    onChange={(e) => setTgt(e.target.value)}
+                                />
+                            </FormControl>
+                            <FormControl>
+                                <FormLabel fontSize="sm">Speed (°/s)</FormLabel>
+                                <Input
+                                    size="sm"
+                                    value={spd}
+                                    onChange={(e) => setSpd(e.target.value)}
+                                />
+                            </FormControl>
+                            <FormControl>
+                                <FormLabel fontSize="sm">Accel (°/s²)</FormLabel>
+                                <Input
+                                    size="sm"
+                                    value={acc}
+                                    onChange={(e) => setAcc(e.target.value)}
+                                />
+                            </FormControl>
+                        </SimpleGrid>
+                        <Button
+                            size="sm"
+                            colorScheme="yellow"
+                            onClick={() => moveTo(joint, +tgt, +spd, +acc)}
+                        >
+                            Execute
+                        </Button>
+                    </AccordionPanel>
+                </AccordionItem>
+
+                {/* Relative Move */}
+                <AccordionItem border="1px solid" bg='gray.700' borderColor={border} mb={2}>
+                    <AccordionButton _expanded={{ bg: "green.600" }}>
+                        <Box flex="1" textAlign="left" display="flex" alignItems="center">
+                            <Icon as={PiRepeat} mr={2} boxSize='18px' /> Relative Move
+                        </Box>
+                        <AccordionIcon />
+                    </AccordionButton>
+                    <AccordionPanel bg={panelBg} p={4}>
+                        <SimpleGrid columns={[1, 3]} spacing={3} mb={3}>
+                            <FormControl>
+                                <FormLabel fontSize="sm">Δ (°)</FormLabel>
+                                <Input
+                                    size="sm"
+                                    value={delta}
+                                    onChange={(e) => setDelta(e.target.value)}
+                                />
+                            </FormControl>
+                            <FormControl>
+                                <FormLabel fontSize="sm">Speed (°/s)</FormLabel>
+                                <Input
+                                    size="sm"
+                                    value={spdBy}
+                                    onChange={(e) => setSpdBy(e.target.value)}
+                                />
+                            </FormControl>
+                            <FormControl>
+                                <FormLabel fontSize="sm">Accel (°/s²)</FormLabel>
+                                <Input
+                                    size="sm"
+                                    value={accBy}
+                                    onChange={(e) => setAccBy(e.target.value)}
+                                />
+                            </FormControl>
+                        </SimpleGrid>
+                        <Button
+                            size="sm"
+                            colorScheme="green"
+                            onClick={() => moveBy(joint, +delta, +spdBy, +accBy)}
+                        >
+                            Execute
+                        </Button>
+                    </AccordionPanel>
+                </AccordionItem>
+
+                {/* Multi-Joint Move */}
+                <AccordionItem border="1px solid" bg='gray.700' borderColor={border} mb={2}>
+                    <AccordionButton _expanded={{ bg: "purple.600" }}>
+                        <Box flex="1" textAlign="left" display="flex" alignItems="center">
+                            <Icon as={PiArrowsHorizontal} mr={2} boxSize='18px' /> Absolute Move Multiple
+                        </Box>
+                        <AccordionIcon />
+                    </AccordionButton>
+                    <AccordionPanel bg={panelBg} p={4}>
+                        <VStack spacing={2} mb={3}>
+                            {multiParams.map((p, i) => (
+                                <HStack key={i} spacing={2}>
+                                    <Text w="25px">J{i + 1}</Text>
+                                    <Input
+                                        size="xs"
+                                        placeholder="Tgt"
+                                        value={p.target}
+                                        onChange={(e) =>
+                                            handleMultiChange(i, "target", e.target.value)
+                                        }
+                                    />
+                                    <Input
+                                        size="xs"
+                                        placeholder="Spd"
+                                        value={p.speed}
+                                        onChange={(e) =>
+                                            handleMultiChange(i, "speed", e.target.value)
+                                        }
+                                    />
+                                    <Input
+                                        size="xs"
+                                        placeholder="Acc"
+                                        value={p.accel}
+                                        onChange={(e) =>
+                                            handleMultiChange(i, "accel", e.target.value)
+                                        }
+                                    />
+                                </HStack>
+                            ))}
+                        </VStack>
+                        <Button
+                            size="sm"
+                            colorScheme="purple"
+                            onClick={() => {
+                                const js = [], ts = [], ss = [], as = [];
+                                multiParams.forEach((p, idx) => {
+                                    const t = parseFloat(p.target);
+                                    if (!isNaN(t)) {
+                                        js.push(idx + 1);
+                                        ts.push(t);
+                                        ss.push(parseFloat(p.speed) || 0);
+                                        as.push(parseFloat(p.accel) || 0);
+                                    }
+                                });
+                                moveMultiple(js, ts, ss, as);
+                            }}
+                        >
+                            Execute
                         </Button>
                     </AccordionPanel>
                 </AccordionItem>

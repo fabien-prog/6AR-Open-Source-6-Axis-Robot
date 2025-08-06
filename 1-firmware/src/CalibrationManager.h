@@ -40,6 +40,7 @@ private:
   float maxPos[CONFIG_JOINT_COUNT];
   float zeroPos[CONFIG_JOINT_COUNT]; // homeOffset
   unsigned long backoffStartMs = 0;
+  bool backoffCleared;
 };
 
 #endif // CALIBRATION_MANAGER_H

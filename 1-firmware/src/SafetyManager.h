@@ -43,7 +43,7 @@ private:
 
   static constexpr unsigned long BLINK_MS = 500; // 2 Hz
 
-  // your RELAY_CONFIG indices for LEDs:
+  // your RELAY_CONFIG indices for LEDs: 
   static constexpr uint8_t RED_LED_RELAY = 1;
   static constexpr uint8_t YELLOW_LED_RELAY = 2;
 

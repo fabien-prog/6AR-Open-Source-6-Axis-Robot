@@ -1,17 +1,19 @@
 #include <Arduino.h>
+#include "ConfigManager.h"
 #include "IOManager.h"
-#include "CommManager.h"
-#include "CalibrationManager.h"
 #include "SafetyManager.h"
+#include "CalibrationManager.h"
+#include "JointManager.h"
+#include "CommManager.h"
 
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(921600);
 
-  // 1) config JSON + joint-EEPROM region
+  // 1) JSON config + EEPROM
   ConfigManager::instance().begin();
 
-  // 2) immediately restore last-saved positions
+  // 2) restore last-saved joint positions
   {
     float saved[CONFIG_JOINT_COUNT];
     ConfigManager::instance().loadJointPositions(saved, CONFIG_JOINT_COUNT);
@@ -26,6 +28,7 @@ void setup()
   CommManager::instance().begin(Serial2);
   SafetyManager::instance().begin();
   CalibrationManager::instance().begin();
+
   JointManager::instance().begin();
 
   Serial.println("=== READY ===");
@@ -33,12 +36,24 @@ void setup()
 
 void loop()
 {
+  // 1) Read any incoming lines
   CommManager::instance().poll();
-  CommManager::instance().processIncoming();
-  CommManager::instance().processQueue();
-  JointManager::instance().updateSteppers();
-  JointManager::instance().handleLogging();
-  CalibrationManager::instance().update();
-  IOManager::instance().update();
+
+  // 2) Dispatch commands (unless a batch is mid-execution)
+  CommManager::instance().processBufferedLines();
+
+  // 3) E-stop & LED logic
   SafetyManager::instance().runChecks();
+
+  // 4) If in EXECUTING state, feed the next mini-step
+  CommManager::instance().handleBatchExecution();
+
+  // 5) Homing state machine
+  CalibrationManager::instance().update();
+
+  // 6) Persist config if needed
+  ConfigManager::instance().update();
+
+  // 7) Digital I/O debounce/update
+  IOManager::instance().update();
 }

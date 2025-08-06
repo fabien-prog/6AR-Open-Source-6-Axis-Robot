@@ -1,384 +1,608 @@
-// src/components/tabs/RunLogsView.jsx
-import React, { useState, useEffect } from "react";
+// src/components/tabs/RunLogsView.js
+
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+} from "react";
 import {
   Box,
   Flex,
   HStack,
+  VStack,
   Text,
   Button,
-  IconButton,
-  Input,
   Select,
   Divider,
-  Progress,
-  useColorModeValue,
   Accordion,
   AccordionItem,
   AccordionButton,
   AccordionPanel,
   AccordionIcon,
-  Tag,
+  Badge,
+  useToast,
+  useDisclosure,
+  useColorModeValue,
+  Input,
 } from "@chakra-ui/react";
 import {
   PiFolderOpen,
   PiPlayCircleFill,
   PiPauseCircleFill,
   PiStopCircleFill,
-  PiArrowBendUpRight,
   PiArrowBendUpLeft,
   PiDownloadSimple,
   PiTrash,
-  PiMagnifyingGlass,
 } from "react-icons/pi";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
-import js from "react-syntax-highlighter/dist/esm/languages/hljs/javascript";
-import { atomOneDark } from "react-syntax-highlighter/dist/esm/styles/hljs";
+import { monokai } from "react-syntax-highlighter/dist/esm/styles/hljs";
+import define6ar from "../utils/hljs-6ar";
+import { run6ar } from "../utils/run6ar";
+import ProgramManagerDrawer from "../modals/ProgramManagerDrawer";
+import { useData } from "../Main/DataContext";
 
-SyntaxHighlighter.registerLanguage("javascript", js);
+SyntaxHighlighter.registerLanguage("6ar", define6ar);
 
-const mockPrograms = [
-  {
-    id: 1,
-    name: "spiral_draw.6AR",
-    code:
-`// Spiral drawing routine
-const center = { x: 0.3, y: 0.0, z: 0.2, rX: -180.0, rY: 0.0, rZ: 180.0 };
-const turns = 5;
-const pointsPerTurn = 36;
-const radiusStep = 0.01;
 
-for (let t = 0; t < turns; t++) {
-  for (let i = 0; i < pointsPerTurn; i++) {
-    const angle = (2 * Math.PI * i) / pointsPerTurn;
-    const r = radiusStep * (t + i / pointsPerTurn);
-    const x = center.x + r * Math.cos(angle);
-    const y = center.y + r * Math.sin(angle);
-    moveL({ x, y, z: center.z }, "Fine", 50);
+const sixarTheme = {
+  ...monokai,
+  "hljs-keyword": { color: "#F92672", fontWeight: "bold" },
+  "hljs-emphasis": { color: "#66D9EF", fontStyle: "italic" },
+  "hljs-attribute": { color: "#A6E22E" },
+  "hljs-variable": { color: "#FD971F" },
+  "hljs-string": { color: "#E6DB74" },
+  "hljs-number": { color: "#AE81FF" },
+  "hljs-comment": { color: "#75715E", fontStyle: "italic" },
+  "hljs-params": { color: "#F8F8F2" },
+  "hljs-punctuation": { color: "#F8F8F2" },
+};
+
+const runnerKey = "runLogsPrograms";
+
+// Load the list of saved programs (array) from localStorage
+function loadRunnerList() {
+  try {
+    const raw = localStorage.getItem(runnerKey) || "[]";
+    return JSON.parse(raw);
+  } catch {
+    return [];
   }
-}`
-  },
-  {
-    id: 2,
-    name: "pick_and_place_batch.6AR",
-    code:
-`// Batch pick-and-place from an array of targets
-const picks = [
-  { x: 0.2, y: 0.1, z: 0.05 },
-  { x: 0.25, y: -0.1, z: 0.05 },
-  { x: 0.3, y: 0.0, z: 0.05 },
-];
-const drop = { x: 0.0, y: 0.3, z: 0.1 };
+}
 
-for (let pt of picks) {
-  moveJ(pt, "Coarse", 100);    // approach
-  openGripper();
-  moveL({ ...pt, z: pt.z - 0.05 }, "Fine", 50); // descend
-  closeGripper();
-  moveL({ ...pt, z: pt.z + 0.1 }, "Fine", 50);  // lift
-  moveJ(drop, "Coarse", 100);  // go to drop
-  openGripper();
-}`
-  },
-  {
-    id: 3,
-    name: "inspection_scan_grid.6AR",
-    code:
-`// Surface inspection in a grid pattern
-const start = { x: 0.1, y: 0.1, z: 0.2 };
-const dx = 0.05, dy = 0.05;
-const rows = 4, cols = 6;
+// Persist the list back to localStorage
+function saveRunnerList(list) {
+  localStorage.setItem(runnerKey, JSON.stringify(list));
+}
 
-for (let i = 0; i < rows; i++) {
-  for (let j = 0; j < cols; j++) {
-    const x = start.x + j * dx;
-    const y = start.y + (i % 2 === 0 ? i * dy : (rows - 1 - i) * dy);
-    const z = start.z;
-    moveL({ x, y, z }, "Fine", 60);
-    // imagine a sensor check here
-    console.log(\`Checked point \${i},\${j}\`, "info");
-  }
-}`
-  }
-];
+// If there are no saved programs yet, start with this default
+const defaultProgram = {
+  id: 1,
+  name: "Main Program.6AR",
+  code: `CONST Number CONST_1 = 10;
+VAR Number VAR_1 = 1;
+VAR Coordinate TARGET_HOME = (-0.107,24.48,60.384,-0.008,95.127,0.06);
+VAR Coordinate TARGET_1 = (0,0,0,0,0,0);
+VAR Coordinate TARGET_2 = (0,0,0,0,0,0);
+VAR Coordinate TARGET_3 = (0,0,0,0,0,0);
+PROC Main()
+  LOG("PROGRAM STARTED");
+  Home;
+  MoveJ Cartesian TARGET_HOME Speed 50;
+  FOR VAR_1 FROM 2 TO CONST_1 STEP 2
+    MoveL Cartesian TARGET_1 Speed 60;
+    MoveL Cartesian TARGET_2 Speed 60;
+    MoveL Cartesian TARGET_3 Speed 60;
+    IF DI_1 == 1 THEN
+      MoveJ Cartesian TARGET_HOME Speed 120;
+      Counter COUNTER_1 INIT 0 INC 1 TO 12;
+    ENDIF;
+  ENDFOR;
+ENDPROC`,
+};
 
-const RunLogsView = () => {
-  // --- Program loader & code viewer state ---
-  const [programs] = useState(mockPrograms);
-  const [currentProgram, setCurrentProgram] = useState(programs[0]);
-  // eslint-disable-next-line no-unused-vars
-  const [uploadedFile, setUploadedFile] = useState(null);
-  const [executingLine, setExecutingLine] = useState(null);
-  const codeLines = currentProgram.code.split("\n");
+export default function RunLogsView() {
+  const toast = useToast();
+  const fileInputRef = useRef(null);
+  const { isOpen, onOpen, onClose } = useDisclosure();
 
-  // --- Runtime status ---
-  const [elapsed, setElapsed] = useState(0);
-  const [cycleCount, setCycleCount] = useState(0);
-  const [running, setRunning] = useState(false);
+  const {
+    getAllJointStatus,
+    parameters,
+    moveMultiple,
+  } = useData();
 
-  // --- Logs panel state ---
-  const [logs, setLogs] = useState([
-    { id: 1, type: "info", message: "Program loaded", time: "12:00:00" },
-    // ...
-  ]);
-  const [logFilter, setLogFilter] = useState("all");
-  const [searchTerm, setSearchTerm] = useState("");
-
-  // --- Simulate execution ---
-  useEffect(() => {
-    let timer;
-    if (running) {
-      timer = setInterval(() => {
-        setElapsed((t) => t + 1);
-        setCycleCount((c) => c + 1);
-        // highlight next line
-        setExecutingLine((prev) =>
-          prev === null || prev === codeLines.length - 1 ? 0 : prev + 1
-        );
-        // append a log
-        setLogs((ls) => [
-          ...ls,
-          {
-            id: Date.now(),
-            type: "info",
-            message: `Executed line ${executingLine === null ? 1 : executingLine + 1}`,
-            time: new Date().toLocaleTimeString(),
-          },
-        ]);
-      }, 1000);
-    }
-    return () => clearInterval(timer);
-  }, [running, executingLine, codeLines.length]);
-
-  // --- Filtered logs ---
-  const filteredLogs = logs.filter((l) => {
-    if (logFilter !== "all" && l.type !== logFilter) return false;
-    if (searchTerm && !l.message.includes(searchTerm)) return false;
-    return true;
+  // ─── Programs state ───────────────────────────────────
+  const [programs, setPrograms] = useState(() => {
+    const saved = loadRunnerList();
+    return saved.length ? saved : [defaultProgram];
   });
+  const [current, setCurrent] = useState(programs[0]);
 
-  // --- Handlers ---
+  // ─── Execution logs state ──────────────────────────────
+  const [logs, setLogs] = useState([]);
+  const [executingLine, setExecutingLine] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [steps, setSteps] = useState(0);
+
+  const genRef = useRef(null);
+  const timerRef = useRef(null);
+  const codeContainerRef = useRef(null);
+  const codeLines = current.code.split("\n");
+
+  // ─── Handle loading new/updated programs from the drawer ──
+  const onLoadRunner = useCallback(
+    (e) => {
+      const prog = e.detail; // { id, name, code }
+      setPrograms((prev) => {
+        const exists = prev.find((p) => p.id === prog.id);
+        const next = exists
+          ? prev.map((p) => (p.id === prog.id ? prog : p))
+          : [...prev, prog];
+        saveRunnerList(next);
+        return next;
+      });
+      setCurrent(prog);
+      toast({
+        title: `Loaded "${prog.name}"`,
+        status: "info",
+        duration: 2000,
+      });
+      onClose();
+    },
+    [toast, onClose]
+  );
+
+  useEffect(() => {
+    window.addEventListener("loadRunnerProgram", onLoadRunner);
+    return () =>
+      window.removeEventListener("loadRunnerProgram", onLoadRunner);
+  }, [onLoadRunner]);
+
+  // ─── Auto-import from editor export ────────────────────
+  const importFromEditor = useCallback(() => {
+    const code = localStorage.getItem("runProgram");
+    if (!code) {
+      toast({
+        title: "No program found in editor",
+        status: "warning",
+        duration: 2000,
+      });
+      return;
+    }
+    const name = "Editor Program";
+    const existing = programs.find((p) => p.name === name);
+    const prog = { id: existing ? existing.id : Date.now(), name, code };
+
+    setPrograms((ps) => {
+      const updated = existing
+        ? ps.map((p) => (p.id === prog.id ? prog : p))
+        : [...ps, prog];
+      saveRunnerList(updated);
+      return updated;
+    });
+    setCurrent(prog);
+    toast({
+      title: existing
+        ? "Updated Editor Program"
+        : "Imported Editor Program",
+      status: "success",
+      duration: 2000,
+    });
+  }, [programs, toast]);
+
+  useEffect(() => {
+    window.addEventListener("runProgramExported", importFromEditor);
+    return () =>
+      window.removeEventListener(
+        "runProgramExported",
+        importFromEditor
+      );
+  }, [importFromEditor]);
+
+  // ── stepOnce: drives both UI and real robot ───────────────
+  async function stepOnce() {
+    if (!genRef.current) return { done: true };
+    const { value, done } = genRef.current.next();
+    if (done) {
+      clearTimeout(timerRef.current);
+      setRunning(false);
+      return { done: true };
+    }
+
+    // 1) log to UI
+    const title = value.type === "cmd"
+      ? `SEND: ${value.payload.cmd}`
+      : value.message;
+    const detail = value.type === "cmd"
+      ? JSON.stringify(value.payload, null, 2)
+      : codeLines[value.line];
+    const entry = {
+      id: Date.now(),
+      time: new Date().toLocaleTimeString(),
+      type: value.type,
+      title,
+      detail,
+      line: value.line,
+    };
+    setLogs((l) => [...l, entry]);
+    setExecutingLine(value.line);
+    setSteps((s) => s + 1);
+
+    // 2) dispatch MoveJ Joint
+    if (value.type === "cmd") {
+      const { cmd, mode, target, speed: rawSpeed } = value.payload;
+
+      if (cmd === "MoveJ" && mode === "Joint" && target) {
+        // pause the interpreter
+        setRunning(false);
+
+        // build a flat [J1…J6] array out of the target object:
+        const joints = [1, 2, 3, 4, 5, 6];
+        const angles = [target.x, target.y, target.z, target.rx, target.ry, target.rz];
+        const targets = angles;  // we’ll send this straight through
+
+        // 3) sanitize userSpeed
+        const userSpeed = Number(rawSpeed) > 0 ? Number(rawSpeed) : 5;
+
+        // 1) figure out a scaled “baseSpeed” for all axes,
+        //    so that userSpeed is honored if it’s below every joint’s max,
+        //    or else uniformly scaled down to fit the tightest joint.
+        const jointMaxSpeeds = joints.map(j => parameters[`joint${j}.maxSpeed`] || 0);
+        const scale = Math.min(
+          1,
+          ...jointMaxSpeeds.map(max => max / (userSpeed || 1)) // avoid /0
+        );
+        const baseSpeeds = joints.map(() => userSpeed * scale);
+
+        // 2) accelerations as before (or you could do something similar if you like)
+        const baseAccels = joints.map(j => (parameters[`joint${j}.maxAccel`] || 0) / 3);
+
+        // 3) compute individual travel times
+        const trapezoidalTime = (d, v, a) => {
+          const tA = v / a;
+          const xA = 0.5 * a * tA * tA;
+          return d < 2 * xA
+            ? 2 * Math.sqrt(d / a)
+            : 2 * tA + (d - 2 * xA) / v;
+        };
+
+        // 4) measure
+        const status = await getAllJointStatus();
+        const deltas = joints.map((_, i) => Math.abs(targets[i] - status[i].position));
+        const syncTime = Math.max(
+          ...deltas.map((d, i) => trapezoidalTime(d, baseSpeeds[i], baseAccels[i])),
+          0.01
+        );
+
+        // 5) solve for vmax & aSync
+        const syncProfiles = deltas.map((d, i) => {
+          const amax = baseAccels[i];
+          const tAmax = syncTime / 2;
+          const xAmax = 0.5 * amax * tAmax * tAmax;
+          let vmax;
+          if (d < 2 * xAmax) {
+            vmax = Math.sqrt(d * amax);
+          } else {
+            const disc = amax * amax * syncTime * syncTime - 4 * amax * d;
+            vmax = disc < 0
+              ? amax * tAmax
+              : (amax * syncTime - Math.sqrt(disc)) / 2;
+          }
+          vmax = Math.min(vmax, baseSpeeds[i]);
+          return { vmax, aSync: vmax / tAmax };
+        });
+
+        // 6) round & clamp
+        const round4 = v => Math.round(v * 10000) / 10000;
+        const speeds = syncProfiles.map(p => round4(Math.max(0.1, p.vmax)));
+        const accels = syncProfiles.map(p => round4(Math.max(0.1, p.aSync)));
+
+        // 7) emit the single MoveMultiple
+        //moveMultiple(joints, targets, speeds, accels);
+        // 8) wait for the robot to finish
+        const safetyMargin = 250; // ms
+        setTimeout(() => setRunning(true), syncTime * 1000 + safetyMargin);
+      }
+    }
+
+    return { value: entry, done: false };
+  }
+
+  // ── runLoop scheduler ─────────────────────────────────────
+  useEffect(() => {
+    if (!running) return;
+    let cancelled = false;
+    async function loop() {
+      const res = await stepOnce();
+      if (cancelled || res.done) return;
+      const delay = res.value.type === "cmd" ? 150 : 15;
+      setTimeout(loop, delay);
+    }
+    loop();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
+
+  // scroll highlight into view
+  useEffect(() => {
+    if (
+      executingLine == null ||
+      !codeContainerRef.current
+    )
+      return;
+    const ln = executingLine + 1;
+    const node = codeContainerRef.current.querySelector(
+      `[data-line="${ln}"]`
+    );
+    if (node) {
+      node.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
+    }
+  }, [executingLine]);
+
+  // ─── UI Handlers ───────────────────────────────────────
+  const handleRun = () => {
+    setLogs([]);
+    setExecutingLine(null);
+    setSteps(0);
+    genRef.current = run6ar(current.code);
+    setRunning(true);
+  };
+  const handlePause = () => setRunning(false);
+  const handleStop = () => {
+    clearTimeout(timerRef.current);
+    genRef.current = null;
+    setRunning(false);
+    setExecutingLine(null);
+    setSteps(0);
+    setLogs([]);
+  };
+  const handleStep = () => {
+    if (!running) stepOnce();
+  };
   const handleUpload = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setUploadedFile(file);
+    const f = e.target.files?.[0];
+    if (!f) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
       const code = ev.target.result;
-      const newProg = {
-        id: Date.now(),
-        name: file.name,
-        code,
-      };
-      setCurrentProgram(newProg);
+      const prog = { id: Date.now(), name: f.name, code };
+      setPrograms((ps) => {
+        const next = [...ps, prog];
+        saveRunnerList(next);
+        return next;
+      });
+      setCurrent(prog);
     };
-    reader.readAsText(file);
+    reader.readAsText(f);
+    // reset the input so you can re‐upload the same file if needed
+    e.target.value = "";
   };
 
+  const bgCode = useColorModeValue("gray.50", "gray.800");
+
   return (
-    <Flex h="100%" gap={4} p={4} minH={0}>
-      {/* ─── Left: Run & Program Viewer ───────────────────────── */}
-      <Flex direction="column" flex="2" gap={4} minH={0}>
-        {/* Program Loader */}
-        <HStack>
-          <Input
-            type="file"
-            accept=".js,.txt"
-            onChange={handleUpload}
-            display="none"
-            id="file-upload"
-          />
-          <label htmlFor="file-upload">
-            <Button leftIcon={<PiFolderOpen />} size="sm">
-              Load Program
+    <>
+      <Input
+        ref={fileInputRef}
+        type="file"
+        accept=".6ar,.txt"
+        onChange={handleUpload}
+        display="none"
+      />
+      <Flex h="100%" gap={6} p={6} minH={0}>
+        {/* ── Left Column ─────────────────────────────────── */}
+        <VStack flex="2" spacing={4} align="stretch">
+          <HStack spacing={2}>
+            <Button
+              leftIcon={<PiFolderOpen />}
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Load File
             </Button>
-          </label>
+            <Button
+              leftIcon={<PiDownloadSimple />}
+              size="sm"
+              onClick={importFromEditor}
+            >
+              Import Editor Program
+            </Button>
+            <Select
+              size="sm"
+              maxW="240px"
+              value={current.id}
+              onChange={(e) =>
+                setCurrent(
+                  programs.find((p) => p.id === +e.target.value) ||
+                  programs[0]
+                )
+              }
+            >
+              {programs.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+            <Button size="sm" onClick={onOpen}>
+              Manage…
+            </Button>
+            <ProgramManagerDrawer
+              isOpen={isOpen}
+              onClose={onClose}
+              editorKey="programEditorPrograms"
+              runnerKey={runnerKey}
+            />
+          </HStack>
 
-          <Select
-            value={currentProgram.id}
-            onChange={(e) =>
-              setCurrentProgram(
-                programs.find((p) => p.id === +e.target.value)
-              )
-            }
-            size="sm"
-            maxW="200px"
+          <Box
+            ref={codeContainerRef}
+            flex="1"
+            overflowY="auto"
+            p={3}
+            bg={bgCode}
+            borderWidth="1px"
+            borderRadius="md"
           >
-            {programs.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </Select>
-        </HStack>
+            <SyntaxHighlighter
+              language="6ar"
+              style={sixarTheme}
+              showLineNumbers
+              wrapLines
+              lineProps={(ln) => ({
+                "data-line": ln,
+                style: {
+                  display: "block",
+                  background:
+                    ln - 1 === executingLine
+                      ? "rgba(0,132,255,0.4)"
+                      : "transparent",
+                },
+              })}
+            >
+              {current.code}
+            </SyntaxHighlighter>
+          </Box>
 
-        {/* Code Viewer */}
-        <Box
-          flex="1"
-          overflowY="auto"
-          p={2}
-          bg={useColorModeValue("gray.50", "gray.800")}
-          borderRadius="md"
-          border="1px solid"
-          borderColor={useColorModeValue("gray.200", "gray.600")}
-        >
-          <SyntaxHighlighter
-            language="javascript"
-            style={atomOneDark}
-            showLineNumbers
-            wrapLines
-            lineProps={(ln) => ({
-              style: {
-                display: "block",
-                background:
-                  ln - 1 === executingLine
-                    ? "rgba(255,255,0,0.2)"
-                    : "transparent",
-              },
-            })}
+          <HStack spacing={2}>
+            <Button
+              colorScheme="green"
+              leftIcon={<PiPlayCircleFill />}
+              onClick={handleRun}
+              isDisabled={running}
+            >
+              Run
+            </Button>
+            <Button
+              colorScheme="yellow"
+              leftIcon={<PiPauseCircleFill />}
+              onClick={handlePause}
+              isDisabled={!running}
+            >
+              Pause
+            </Button>
+            <Button
+              colorScheme="cyan"
+              leftIcon={<PiArrowBendUpLeft />}
+              onClick={handleStep}
+            >
+              Step
+            </Button>
+            <Button
+              colorScheme="red"
+              leftIcon={<PiStopCircleFill />}
+              onClick={handleStop}
+            >
+              Stop
+            </Button>
+            <Divider orientation="vertical" h="24px" />
+            <Text>Lines Executed: {steps}</Text>
+          </HStack>
+        </VStack>
+
+        {/* ── Right Column ────────────────────────────────── */}
+        <VStack flex="1" spacing={4} align="stretch">
+          <HStack justify="space-between">
+            <Text fontSize="lg" fontWeight="semibold">
+              Execution Logs
+            </Text>
+            <HStack spacing={2}>
+              <Button
+                size="sm"
+                leftIcon={<PiTrash />}
+                onClick={() => setLogs([])}
+              >
+                Clear Logs
+              </Button>
+              <Button
+                size="sm"
+                leftIcon={<PiDownloadSimple />}
+                onClick={() => {
+                  const text = logs
+                    .map((l) => {
+                      const det =
+                        l.detail != null ? l.detail : "";
+                      const single =
+                        typeof det === "string"
+                          ? det.replace(/\n/g, " ")
+                          : String(det);
+                      return `[${l.time}] ${l.title} (${single})`;
+                    })
+                    .join("\n");
+                  const blob = new Blob([text], {
+                    type: "text/plain",
+                  });
+                  const url =
+                    URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "run6ar.log";
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                Export Logs
+              </Button>
+            </HStack>
+          </HStack>
+
+          <Box
+            flex="1"
+            overflowY="auto"
+            borderWidth="1px"
+            borderRadius="md"
+            p={2}
+            bg={useColorModeValue("white", "gray.700")}
           >
-            {currentProgram.code}
-          </SyntaxHighlighter>
-        </Box>
-
-        {/* Execution Controls */}
-        <HStack spacing={4}>
-          <IconButton
-            colorScheme="green"
-            icon={<PiPlayCircleFill />}
-            aria-label="Run"
-            onClick={() => setRunning(true)}
-          />
-          <IconButton
-            colorScheme="yellow"
-            icon={<PiPauseCircleFill />}
-            aria-label="Pause"
-            onClick={() => setRunning(false)}
-          />
-          <IconButton
-            colorScheme="blue"
-            icon={<PiArrowBendUpLeft />}
-            aria-label="Step Back"
-            onClick={() =>
-              setExecutingLine((l) => Math.max(0, (l ?? codeLines.length) - 1))
-            }
-          />
-          <IconButton
-            colorScheme="blue"
-            icon={<PiArrowBendUpRight />}
-            aria-label="Step Forward"
-            onClick={() =>
-              setExecutingLine((l) =>
-                l === null || l === codeLines.length - 1 ? 0 : l + 1
-              )
-            }
-          />
-          <IconButton
-            colorScheme="red"
-            icon={<PiStopCircleFill />}
-            aria-label="Stop"
-            onClick={() => {
-              setRunning(false);
-              setExecutingLine(null);
-            }}
-          />
-          <Divider />
-          <Text>
-            Elapsed: <Tag>{elapsed}s</Tag>
-          </Text>
-          <Text>
-            Cycles: <Tag>{cycleCount}</Tag>
-          </Text>
-        </HStack>
-
-        {/* Progress Bar */}
-        <Progress
-          value={executingLine === null ? 0 : ((executingLine + 1) / codeLines.length) * 100}
-          size="sm"
-          colorScheme="primary"
-        />
+            <Accordion allowMultiple>
+              {logs.length === 0 ? (
+                <Text
+                  color="gray.500"
+                  textAlign="center"
+                  py={8}
+                >
+                  No log entries
+                </Text>
+              ) : (
+                logs.map((l) => (
+                  <AccordionItem key={l.id}>
+                    <AccordionButton>
+                      <Box flex="1" textAlign="left">
+                        [{l.time}]{" "}
+                        <Badge
+                          size="sm"
+                          colorScheme={
+                            l.type === "cmd" ? "blue" : "gray"
+                          }
+                          mr={2}
+                        >
+                          {l.type}
+                        </Badge>
+                        {l.title}
+                      </Box>
+                      <AccordionIcon />
+                    </AccordionButton>
+                    <AccordionPanel pb={4}>
+                      <Text
+                        as="pre"
+                        fontSize="sm"
+                        whiteSpace="pre-wrap"
+                        wordBreak="break-all"
+                      >
+                        {l.detail}
+                      </Text>
+                    </AccordionPanel>
+                  </AccordionItem>
+                ))
+              )}
+            </Accordion>
+          </Box>
+        </VStack>
       </Flex>
-
-      {/* ─── Right: Logs Panel ─────────────────────────── */}
-      <Flex direction="column" flex="1" minH={0}>
-        {/* Filter & Search */}
-        <HStack mb={2}>
-          <Select
-            size="sm"
-            value={logFilter}
-            onChange={(e) => setLogFilter(e.target.value)}
-          >
-            <option value="all">All</option>
-            <option value="info">Info</option>
-            <option value="warning">Warning</option>
-            <option value="error">Error</option>
-          </Select>
-          <Input
-            size="sm"
-            placeholder="Search logs…"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            icon={<PiMagnifyingGlass />}
-          />
-          <IconButton
-            size="sm"
-            icon={<PiTrash />}
-            aria-label="Clear logs"
-            onClick={() => setLogs([])}
-          />
-          <IconButton
-            size="sm"
-            icon={<PiDownloadSimple />}
-            aria-label="Export logs"
-            onClick={() => {
-              const blob = new Blob(
-                [logs.map((l) => `[${l.time}] ${l.type}: ${l.message}`).join("\n")],
-                { type: "text/plain" }
-              );
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = "logs.txt";
-              a.click();
-              URL.revokeObjectURL(url);
-            }}
-          />
-        </HStack>
-
-        {/* Log entries */}
-        <Box
-          flex="1"
-          overflowY="auto"
-          borderRadius="md"
-          border="1px solid"
-          borderColor={useColorModeValue("gray.200", "gray.600")}
-        >
-          <Accordion allowMultiple>
-            {filteredLogs.map((log) => (
-              <AccordionItem key={log.id}>
-                <AccordionButton>
-                  <Box flex="1" textAlign="left">
-                    [{log.time}] <Tag size="sm">{log.type}</Tag> {log.message}
-                  </Box>
-                  <AccordionIcon />
-                </AccordionButton>
-                <AccordionPanel pb={4}>
-                  <Text fontSize="sm" color="gray.500">
-                    {/* Details could go here */}
-                    Details for log #{log.id}
-                  </Text>
-                </AccordionPanel>
-              </AccordionItem>
-            ))}
-            {filteredLogs.length === 0 && (
-              <Box p={4} textAlign="center" color="gray.500">
-                No log entries
-              </Box>
-            )}
-          </Accordion>
-        </Box>
-      </Flex>
-    </Flex>
+    </>
   );
-};
-
-export default RunLogsView;
+}

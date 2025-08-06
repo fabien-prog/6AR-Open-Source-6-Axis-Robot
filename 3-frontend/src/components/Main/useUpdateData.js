@@ -309,6 +309,19 @@ export function useLinearMove() {
 export function useLinearMoveToTeensy() {
     const { socket } = useSocket();
     return useMutation(({ position, quaternion, speed, angular_speed_deg, accel }) =>
-        emitPromise(socket, "linearMoveToTeensy", { position, quaternion, speed, angular_speed_deg, accel })
+        emitPromise(socket, "linearMoveToTeensy", {
+            position,
+            quaternion,
+            speed,
+            angular_speed_deg,
+            accel,
+        })
+    );
+}
+
+export function useProfileToTeensy() {
+    const { socket } = useSocket();
+    return useMutation(payload =>
+        emitPromise(socket, "profileMoveToTeensy", payload)
     );
 }

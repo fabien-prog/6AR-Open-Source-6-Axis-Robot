@@ -1,25 +1,127 @@
+// src/components/Sidebar.jsx
 import React from "react";
-import { Box, VStack, Text, IconButton, Tooltip, Accordion, AccordionItem, AccordionButton, AccordionPanel, AccordionIcon } from "@chakra-ui/react";
+import {
+  Box,
+  VStack,
+  Text,
+  IconButton,
+  Tooltip,
+  Accordion,
+  AccordionItem,
+  AccordionButton,
+  AccordionPanel,
+  AccordionIcon,
+} from "@chakra-ui/react";
 import { Draggable, Droppable } from "react-beautiful-dnd";
 import { FiChevronLeft, FiChevronRight } from "react-icons/fi";
 
-// Define categories for blocks.
+// 1) Define categories for blocks.
 const categories = [
   { title: "Standard", blocks: ["Move L", "Move J", "Home"] },
   { title: "Conditionals", blocks: ["If", "Else", "End If", "Then"] },
   { title: "Loops", blocks: ["For Loop", "End For"] },
-  { title: "Miscellaneous", blocks: ["Counter", "Console Log"] },
+  { title: "Miscellaneous", blocks: ["Counter", "Console Log", "Math"] },
 ];
 
+// 2) Descriptions for each block type
+const blockDescriptions = {
+  "Move L": [
+    "Move L — Linear Move",
+    "Moves the robot in a straight line to a specified target at the set speed.",
+    "Parameters:",
+    "- Source: Manual joints or a RobTarget variable",
+    "- Cartesian: X, Y, Z, Rx, Ry, Rz coordinates (if manual)",
+    "- Speed: Linear speed in mm/s",
+    "- Reference: World or Work Object frame",
+  ],
+  "Move J": [
+    "Move J — Joint Move",
+    "Moves the robot by driving each joint to specified angles so that they all arrive at the same time with a max angular single joint speed.",
+    "Parameters:",
+    "- Source: Manual joints or a RobTarget variable",
+    "- Mode: Joint (angles) or Cartesian (converted)",
+    "- Joint Angles: Six values J1…J6 (if manual joint mode)",
+    "- Speed: Max joint speed in °/s",
+    "- Reference: World or Work Object frame",
+  ],
+  Home: [
+    "Home — Homing Routine",
+    "Homes all axes using their limit switches.",
+    "No parameters.",
+  ],
+  If: [
+    "If — Conditional Start",
+    "Begins an IF block based on a comparison. Passes through if condition is true else it ignores it.",
+    "Parameters:",
+    "- Variable: Choose DI input, a Variable, or a Constant",
+    "- Operator: ==, !=, <, >",
+    "- Value: Right-hand side to compare",
+  ],
+  Else: [
+    "Else — Conditional Else (not working yet)",
+    "Defines the alternate branch of an IF block.",
+    "No parameters.",
+  ],
+  "End If": [
+    "End If — Conditional End",
+    "Closes the IF/ELSE structure.",
+    "No parameters.",
+  ],
+  Then: [
+    "Then — Counter Action",
+    "Performs an action on a counter variable when condition met.",
+    "Parameters:",
+    "- Action: Increase, Decrease, or Set Counter",
+    "- Target: Name of the counter variable",
+  ],
+  "For Loop": [
+    "For Loop — Loop Start",
+    "Repeats enclosed blocks a set number of times.",
+    "Parameters:",
+    "- Counter: A numeric variable",
+    "- Start: Initial value",
+    "- End: Final value",
+    "- Step: Increment per iteration",
+  ],
+  "End For": [
+    "End For — Loop End",
+    "Closes the FOR loop.",
+    "No parameters.",
+  ],
+  Counter: [
+    "Counter — Counter Declaration",
+    "Defines and initializes a counter variable.",
+    "Parameters:",
+    "- Name: Counter variable name",
+    "- Initial: Starting value",
+    "- Increment: Step amount",
+    "- Target: Final value",
+  ],
+  "Console Log": [
+    "Console Log — Logging",
+    "Outputs text to the console (supports $variable interpolation).",
+    "Parameters:",
+    "- Message: Text to log (use $var to insert variable values)",
+    "- Level: info, warn, error, or log",
+  ],
+  Math: [
+    "Math — Expression Evaluation",
+    "Computes an expression and stores the result in a specified variable.",
+    "Parameters:",
+    "- Target Var: Variable to receive the result",
+    "- Expression: Use +, -, *, /, (), variables, and numbers",
+  ],
+};
+
 const Sidebar = ({ expanded, setExpanded }) => {
-  // For collapsed mode, flatten all blocks into a single array with consecutive indexes.
-  const collapsedBlocks = categories.reduce((acc, category) => acc.concat(category.blocks), []);
+  // For collapsed mode, flatten all blocks
+  const collapsedBlocks = categories.flatMap(c => c.blocks);
 
   return (
     <Box
       position="absolute"
-      top="0px"
-      left="0px"
+      top="0"
+      left="0"
       zIndex={2}
       bg="gray.600"
       p={4}
@@ -29,7 +131,10 @@ const Sidebar = ({ expanded, setExpanded }) => {
       transition="width 0.3s ease"
     >
       <VStack spacing={2} align="stretch">
-        <Tooltip label={expanded ? "Collapse Sidebar" : "Expand Sidebar"} placement="right">
+        <Tooltip
+          label={expanded ? "Collapse Sidebar" : "Expand Sidebar"}
+          placement="right"
+        >
           <IconButton
             variant="ghost"
             color="white"
@@ -40,11 +145,19 @@ const Sidebar = ({ expanded, setExpanded }) => {
             _hover={{ bg: "gray.500" }}
           />
         </Tooltip>
+
         {expanded && (
-          <Text fontWeight="bold" color="white" fontSize="xl" mb={2} textAlign="center">
+          <Text
+            fontWeight="bold"
+            color="white"
+            fontSize="xl"
+            mb={2}
+            textAlign="center"
+          >
             Blocks
           </Text>
         )}
+
         {expanded ? (
           <Accordion allowMultiple>
             {categories.map((category, catIndex) => (
@@ -58,23 +171,48 @@ const Sidebar = ({ expanded, setExpanded }) => {
                   </AccordionButton>
                 </h2>
                 <AccordionPanel p={2}>
-                  {/* Use a unique droppableId for each category */}
-                  <Droppable droppableId={`sidebar-${catIndex}`} isDropDisabled={true} isCombineEnabled={false} ignoreContainerClipping={false}>
+                  <Droppable
+                    droppableId={`sidebar-${catIndex}`}
+                    isDropDisabled
+                    isCombineEnabled={false}
+                    ignoreContainerClipping={false}
+                  >
                     {(provided) => (
-                      <VStack spacing={3} ref={provided.innerRef} {...provided.droppableProps} align="stretch">
-                        {category.blocks.map((type, index) => (
-                          <Draggable key={type} draggableId={type} index={index}>
-                            {(provided) => (
-                              <Tooltip key={index} label={""} placement="right">
+                      <VStack
+                        spacing={3}
+                        ref={provided.innerRef}
+                        {...provided.droppableProps}
+                        align="stretch"
+                      >
+                        {category.blocks.map((type, idx) => (
+                          <Draggable key={type} draggableId={type} index={idx}>
+                            {(prov) => (
+                              <Tooltip
+                                label={
+                                  <VStack align="start" spacing={1} maxW="250px">
+                                    {blockDescriptions[type].map((line, i) => (
+                                      <Text
+                                        key={i}
+                                        fontSize="xs"
+                                        whiteSpace="pre-wrap"
+                                        color="white"
+                                      >
+                                        {line}
+                                      </Text>
+                                    ))}
+                                  </VStack>
+                                }
+                                placement="right"
+                                hasArrow
+                                bg="gray.700"
+                              >
                                 <Box
-                                  ref={provided.innerRef}
-                                  {...provided.draggableProps}
-                                  {...provided.dragHandleProps}
+                                  ref={prov.innerRef}
+                                  {...prov.draggableProps}
+                                  {...prov.dragHandleProps}
                                   bg="gray.800"
                                   p={3}
                                   borderRadius="md"
-                                  width="100%"
-                                  textAlign="center"
                                   _hover={{ bg: "gray.700", cursor: "grab" }}
                                 >
                                   <Text color="white" fontSize="md">
@@ -94,22 +232,35 @@ const Sidebar = ({ expanded, setExpanded }) => {
             ))}
           </Accordion>
         ) : (
-          <Droppable droppableId="sidebar-collapsed" isDropDisabled={true} isCombineEnabled={false} ignoreContainerClipping={false}>
+          <Droppable
+            droppableId="sidebar-collapsed"
+            isDropDisabled
+            isCombineEnabled={false}
+            ignoreContainerClipping={false}
+          >
             {(provided) => (
-              <VStack spacing={3} ref={provided.innerRef} {...provided.droppableProps} align="center">
-                {collapsedBlocks.map((type, index) => (
-                  <Draggable key={type} draggableId={type} index={index}>
-                    {(provided) => (
-                      <Tooltip key={index} label={type} placement="right">
+              <VStack
+                spacing={3}
+                ref={provided.innerRef}
+                {...provided.droppableProps}
+                align="center"
+              >
+                {collapsedBlocks.map((type, idx) => (
+                  <Draggable key={type} draggableId={type} index={idx}>
+                    {(prov) => (
+                      <Tooltip
+                        label={type}
+                        placement="right"
+                        hasArrow
+                        bg="gray.700"
+                      >
                         <Box
-                          ref={provided.innerRef}
-                          {...provided.draggableProps}
-                          {...provided.dragHandleProps}
+                          ref={prov.innerRef}
+                          {...prov.draggableProps}
+                          {...prov.dragHandleProps}
                           bg="gray.800"
                           p={2}
                           borderRadius="md"
-                          width="100%"
-                          textAlign="center"
                           _hover={{ bg: "gray.700", cursor: "grab" }}
                         >
                           <Text color="white" fontSize="sm">

@@ -1,165 +1,510 @@
-import React, { useState } from "react";
-import { Box, Button, HStack, VStack, Text, Input, Select, Tooltip, IconButton } from "@chakra-ui/react";
+// src/components/BlockEditor.jsx
+import React, { useMemo } from "react";
+import {
+  Box,
+  Button,
+  HStack,
+  VStack,
+  Text,
+  Tooltip,
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+  PopoverArrow,
+  PopoverCloseButton,
+  Select,
+  Badge,
+  PopoverHeader,
+  PopoverBody,
+  Input,
+  NumberInput,
+  NumberInputField,
+  SimpleGrid,
+  Icon
+} from "@chakra-ui/react";
 import { Draggable, Droppable } from "react-beautiful-dnd";
-import { PiArrowUp, PiArrowDown, PiCopy } from "react-icons/pi";
+import {
+  PiArrowUp,
+  PiArrowDown,
+  PiCopy,
+  PiPencilSimple,
+  PiTrash,
+  PiTarget,
+  PiCheck,
+  PiSpeedometer,
+  PiMapPinAreaBold,
+  PiTerminal,
+  PiHouseBold,
+} from "react-icons/pi";
+import { MathEditor } from "./MathEditor";
 
-// Define a color mapping for each block type in the editor.
+// 1) Accent colors for each block type
 const blockColors = {
-  "Move L": "primary.700",
-  "Move J": "primary.700",
-  Home: "red.700",
-  If: "cyan.700",
-  Else: "yellow.700",
-  "End If": "gray.700",
-  Counter: "teal.700",
-  Then: "green.700",
-  "For Loop": "pink.700",
-  "End For": "pink.700",
-  "Console Log": "purple.700",
+  "Move L": "primary.500",
+  "Move J": "primary.500",
+  Home: "red.500",
+  If: "cyan.500",
+  Else: "yellow.500",
+  "End If": "gray.500",
+  Counter: "teal.500",
+  Then: "green.500",
+  "For Loop": "pink.500",
+  "End For": "pink.500",
+  "Console Log": "purple.500",
 };
 
-const BlockEditor = ({ state, dispatch, filter }) => {
-  const filteredBlocks = state.blocks.filter(
-    (block) => block.type.toLowerCase().includes(filter.toLowerCase()) || (block.comment && block.comment.toLowerCase().includes(filter.toLowerCase()))
+// 2) Compute nesting levels for indentation
+function computeIndentLevels(blocks) {
+  const levels = [];
+  let indent = 0;
+  blocks.forEach((b) => {
+    if (b.type === "End If" || b.type === "End For") {
+      indent = Math.max(indent - 1, 0);
+    }
+    levels.push(indent);
+    if (b.type === "If" || b.type === "For Loop") {
+      indent += 1;
+    }
+  });
+  return levels;
+}
+
+// Render a nice badge-based summary
+function renderSummary(block, variables = []) {
+  switch (block.type) {
+    case "Move L":
+    case "Move J": {
+      // fall back to manual if unset
+      const src = block.src || "manual";
+      // if manual + MoveJ: respect moveMode, otherwise always Cartesian
+      let pt;
+      if (src === "manual") {
+        if (block.type === "Move J" && block.moveMode === "joint") {
+          pt = `[${(block.joints || []).join(",")}]`;
+        } else {
+          pt = block.cartesian || "—";
+        }
+      } else {
+        pt = block.pointVariable || "—";
+      }
+      return (
+        <HStack spacing={3} wrap="wrap">
+          {block.type === "Move J" && (
+            <Badge colorScheme="gray" display="inline-flex" alignItems="center" px={3} py={2} borderRadius="md" fontSize="sm">
+              {block.moveMode === "joint" ? "Joint" : "Cartesian"}
+            </Badge>
+          )}
+          <Badge
+            display="inline-flex"
+            alignItems="center"
+            colorScheme="blue"
+            px={3}
+            py={2}
+            borderRadius="md"
+            fontSize="sm"
+          >
+            <Icon boxSize='16px' as={PiTarget} mr={2} /> {pt}
+          </Badge>
+          <Badge
+            display="inline-flex"
+            alignItems="center"
+            colorScheme="green"
+            px={3}
+            py={2}
+            borderRadius="md"
+            fontSize="sm"
+          >
+            <Icon boxSize='16px' as={PiSpeedometer} mr={2} />{" "}
+            {block.speed} {block.type === "Move L" ? "mm/s" : "°/s"}
+          </Badge>
+          <Badge
+            display="inline-flex"
+            alignItems="center"
+            colorScheme="orange"
+            px={3}
+            py={2}
+            borderRadius="md"
+            fontSize="sm"
+          >
+            <Icon boxSize='16px' as={PiMapPinAreaBold} mr={2} />{" "}
+            {block.referenceType === "WObj"
+              ? block.referenceObject || "–"
+              : "World"}
+          </Badge>
+        </HStack>
+      );
+    }
+    case "Home":
+      return (
+        <Badge
+          display="inline-flex"
+          alignItems="center"
+          colorScheme="red"
+          px={3}
+          py={2}
+          borderRadius="md"
+          fontSize="sm"
+        >
+          <Icon boxSize='16px' as={PiHouseBold} mr={2} /> Home all axes
+        </Badge>
+      );
+    case "If": {
+      const left =
+        block.variableSource === "IO"
+          ? block.io
+          : block.variableSource === "Variable"
+            ? block.io
+            : block.condition;
+      return (
+        <HStack spacing={3} wrap="wrap">
+          <Badge
+            display="inline-flex"
+            alignItems="center"
+            colorScheme="cyan"
+            px={3}
+            py={2}
+            borderRadius="md"
+            fontSize="sm"
+          >
+            {left} {block.operator}   {block.value}
+          </Badge>
+        </HStack>
+      );
+    }
+    case "For Loop":
+      return (
+        <HStack spacing={3} wrap="wrap">
+          <Badge
+            display="inline-flex"
+            alignItems="center"
+            colorScheme="pink"
+            px={3}
+            py={2}
+            borderRadius="md"
+            fontSize="sm"
+          >
+            {block.counter || "START "}: {block.start}
+          </Badge>
+          <Badge
+            display="inline-flex"
+            alignItems="center"
+            colorScheme="pink"
+            px={3}
+            py={2}
+            borderRadius="md"
+            fontSize="sm"
+          >
+            end: {block.end}
+          </Badge>
+          <Badge
+            display="inline-flex"
+            alignItems="center"
+            colorScheme="pink"
+            px={3}
+            py={2}
+            borderRadius="md"
+            fontSize="sm"
+          >
+            step: {block.step}
+          </Badge>
+        </HStack>
+      );
+    case "Counter":
+      return (
+        <Badge
+          display="inline-flex"
+          alignItems="center"
+          colorScheme="teal"
+          px={3}
+          py={2}
+          borderRadius="md"
+          fontSize="sm"
+        >
+          {block.name} : {block.initial} → {block.target} (+{block.increment})
+        </Badge>
+      );
+    case "Then":
+      return (
+        <Badge
+          display="inline-flex"
+          alignItems="center"
+          colorScheme="green"
+          px={3}
+          py={2}
+          borderRadius="md"
+          fontSize="sm"
+        >
+          <Icon boxSize='16px' as={PiCheck} mr={2} /> {block.action} {block.targetCounter}
+        </Badge>
+      );
+    case "Console Log":
+      return (
+        <Badge
+          display="inline-flex"
+          alignItems="center"
+          colorScheme="purple"
+          px={3}
+          py={2}
+          borderRadius="md"
+          fontSize="sm"
+        >
+          <Icon boxSize='16px' as={PiTerminal} mr={2} /> console.{block.level}(
+          "{block.message}")
+        </Badge>
+      );
+    case "Math": {
+      // 1) Try computing the preview
+      let preview = "—";
+      try {
+        // extract names and numeric values
+        const names = variables.map(v => v.name);
+        const values = variables.map(v => {
+          const n = parseFloat(v.value);
+          return isNaN(n) ? 0 : n;
+        });
+        // build a function: (a,b,c...) => expression
+        // eslint-disable-next-line no-new-func
+        const fn = new Function(...names, `return ${block.expression || "0"};`);
+        preview = fn(...values);
+      } catch {
+        // keep preview as "—" on error
+      }
+
+      return (
+        <HStack spacing={3}>
+          <Badge
+            display="inline-flex"
+            alignItems="center"
+            colorScheme="blue"
+            px={3}
+            py={2}
+            borderRadius="md"
+            fontSize="sm"
+          >
+            {block.varName || "—"}
+          </Badge>
+          <Badge
+            display="inline-flex"
+            alignItems="center"
+            colorScheme="red"
+            px={3}
+            py={2}
+            borderRadius="md"
+            fontSize="sm"
+          >
+            {block.expression || "—"}
+          </Badge>
+          <Badge
+            display="inline-flex"
+            alignItems="center"
+            colorScheme="green"
+            px={3}
+            py={2}
+            borderRadius="md"
+            fontSize="sm"
+          >
+            {/* reuse your PiCheck icon to indicate “result” */}
+            <Icon boxSize="16px" as={PiCheck} mr={2} /> {preview}
+          </Badge>
+        </HStack>
+      );
+    }
+    default:
+      return null;
+  }
+}
+
+export default function BlockEditor({ state, dispatch, filter }) {
+  // memoize indent levels
+  const indentLevels = useMemo(
+    () => computeIndentLevels(state.blocks),
+    [state.blocks]
   );
+  const [logAutocomplete, setLogAutocomplete] = React.useState({
+    openForIndex: null,
+    replaceRange: [0, 0],
+    suggestions: [],
+  });
 
-  const [collapsed, setCollapsed] = useState({});
+  const visible = state.blocks
+    .map((blk, i) => ({ blk, i }))
+    .filter(
+      ({ blk }) =>
+        blk.type.toLowerCase().includes(filter.toLowerCase()) ||
+        (blk.comment || "").toLowerCase().includes(filter.toLowerCase())
+    );
 
-  const toggleCollapse = (index) => {
-    setCollapsed((prev) => ({ ...prev, [index]: !prev[index] }));
+
+  // Dispatch helpers
+  const updateBlock = (i, field, val) =>
+    dispatch({ type: "UPDATE_BLOCK", index: i, payload: { [field]: val } });
+  const removeBlock = (i) =>
+    dispatch({ type: "REMOVE_BLOCK", index: i });
+  const duplicateBlock = (i) => {
+    const copy = { ...state.blocks[i] };
+    const arr = [...state.blocks];
+    arr.splice(i + 1, 0, copy);
+    dispatch({ type: "REORDER_BLOCKS", payload: arr });
   };
-
-  const updateBlock = (index, field, value) => {
-    dispatch({ type: "UPDATE_BLOCK", index, payload: { [field]: value } });
-  };
-
-  const removeBlock = (index) => {
-    dispatch({ type: "REMOVE_BLOCK", index });
-  };
-
-  const duplicateBlock = (index) => {
-    const blockToDuplicate = state.blocks[index];
-    const newBlocks = Array.from(state.blocks);
-    newBlocks.splice(index + 1, 0, { ...blockToDuplicate });
-    dispatch({ type: "REORDER_BLOCKS", payload: newBlocks });
-  };
-
-  const moveBlockUp = (index) => {
-    if (index === 0) return;
-    const newBlocks = Array.from(state.blocks);
-    [newBlocks[index - 1], newBlocks[index]] = [newBlocks[index], newBlocks[index - 1]];
-    dispatch({ type: "REORDER_BLOCKS", payload: newBlocks });
-  };
-
-  const moveBlockDown = (index) => {
-    if (index === state.blocks.length - 1) return;
-    const newBlocks = Array.from(state.blocks);
-    [newBlocks[index + 1], newBlocks[index]] = [newBlocks[index], newBlocks[index + 1]];
-    dispatch({ type: "REORDER_BLOCKS", payload: newBlocks });
+  const moveBlock = (from, to) => {
+    if (to < 0 || to >= state.blocks.length) return;
+    const arr = [...state.blocks];
+    const [blk] = arr.splice(from, 1);
+    arr.splice(to, 0, blk);
+    dispatch({ type: "REORDER_BLOCKS", payload: arr });
   };
 
   // Render block parameters with compact spacing.
   const renderBlockParams = (block, index) => {
     switch (block.type) {
       case "Move L":
-      case "Move J":
+      case "Move J": {
+        const isMoveL = block.type === "Move L";
+
         return (
           <>
-            {/* Option to choose point source */}
-            <HStack spacing={2} mb={1}>
-              <Text w="70px" fontSize="sm">
-                Point Src:
-              </Text>
-              <Select size="sm" value={block.pointSource || "manual"} onChange={(e) => updateBlock(index, "pointSource", e.target.value)}>
-                <option value="manual">Manual</option>
-                <option value="variable">Variable</option>
+            {/* 1) Source: manual joints or variable */}
+            <HStack spacing={2} mb={2}>
+              <Text w="100px" fontSize="sm">Source:</Text>
+              <Select
+                size="sm"
+                value={block.src || "manual"}
+                onChange={e => updateBlock(index, "src", e.target.value)}
+              >
+                <option value="manual">Manual Joints</option>
+                <option value="variable">RobTarget Var</option>
               </Select>
             </HStack>
-            {block.pointSource === "manual" ? (
-              <HStack spacing={2} mb={1}>
-                <Text w="70px" fontSize="sm">
-                  Point:
-                </Text>
-                <Input size="sm" placeholder="Enter point" value={block.point || ""} onChange={(e) => updateBlock(index, "point", e.target.value)} />
-                <Tooltip label="Auto-fill teaching coordinates" fontSize="xs">
-                  <Button size="xs" onClick={() => updateBlock(index, "point", "0,0,0,0,0,0")}>
-                    Teach
-                  </Button>
-                </Tooltip>
-              </HStack>
+
+            {/* manual: six NumberInputs */}
+            {block.src === "manual" ? (
+              <SimpleGrid columns={3} spacing={2} mb={2}>
+                {Array.from({ length: 6 }).map((_, j) => (
+                  <NumberInput
+                    key={j}
+                    size="sm"
+                    value={block.joints?.[j] ?? ""}
+                    onChange={val => {
+                      const joints = [...(block.joints || Array(6).fill(""))];
+                      joints[j] = val;
+                      updateBlock(index, "joints", joints);
+                    }}
+                  >
+                    <NumberInputField placeholder={`J${j + 1}`} />
+                  </NumberInput>
+                ))}
+              </SimpleGrid>
             ) : (
-              <HStack spacing={2} mb={1}>
-                <Text w="70px" fontSize="sm">
-                  Point Var:
-                </Text>
-                <Select size="sm" value={block.pointVariable || ""} onChange={(e) => updateBlock(index, "pointVariable", e.target.value)}>
-                  <option value="">Select RobTarget</option>
+              <HStack spacing={2} mb={2}>
+                <Text w="100px" fontSize="sm">Point Var:</Text>
+                <Select
+                  size="sm"
+                  value={block.pointVariable || ""}
+                  onChange={e => updateBlock(index, "pointVariable", e.target.value)}
+                >
+                  <option value="">-- Select RobTarget --</option>
                   {state.variables
-                    .filter((v) => v.type === "Robot Target (ROBTARGET)")
+                    .filter(v => v.type.includes("Robot Target"))
                     .map((v, i) => (
-                      <option key={i} value={v.name}>
-                        {v.name}
-                      </option>
+                      <option key={i} value={v.name}>{v.name}</option>
                     ))}
                 </Select>
               </HStack>
             )}
-            <HStack spacing={2} mb={1}>
-              <Text w="70px" fontSize="sm">
-                Reference Type:
-              </Text>
-              <Select size="sm" value={block.referenceType || "World"} onChange={(e) => updateBlock(index, "referenceType", e.target.value)}>
-                <option value="World">World</option>
-                <option value="Tool">Tool</option>
-              </Select>
-            </HStack>
-            {block.referenceType === "Tool" && (
-              <HStack spacing={2} mb={1}>
-                <Text w="70px" fontSize="sm">
-                  Reference:
-                </Text>
-                <Select size="sm" value={block.referenceObject || ""} onChange={(e) => updateBlock(index, "referenceObject", e.target.value)}>
-                  <option value="">Select...</option>
-                  {block.type === "Move L"
-                    ? state.variables
-                      .filter((v) => v.type === "Work Object")
-                      .map((v, i) => (
-                        <option key={i} value={v.name}>
-                          {v.name}
-                        </option>
-                      ))
-                    : state.variables
-                      .filter((v) => v.type === "Robot Target")
-                      .map((v, i) => (
-                        <option key={i} value={v.name}>
-                          {v.name}
-                        </option>
-                      ))}
+
+            {/* (Move J only) Mode switch */}
+            {!isMoveL && (
+              <HStack spacing={2} mb={2}>
+                <Text w="100px" fontSize="sm">Mode:</Text>
+                <Select
+                  size="sm"
+                  value={block.moveMode || "cartesian"}
+                  onChange={e => updateBlock(index, "moveMode", e.target.value)}
+                >
+                  <option value="cartesian">Cartesian</option>
+                  <option value="joint">Joint Angles</option>
                 </Select>
               </HStack>
             )}
-            <HStack spacing={2} mb={1}>
-              <Text w="70px" fontSize="sm">
-                Speed:
-              </Text>
-              <Select size="sm" value={block.speed || "100"} onChange={(e) => updateBlock(index, "speed", e.target.value)}>
-                <option value="100">100</option>
-                <option value="200">200</option>
-                <option value="300">300</option>
-                <option value="Vmax">Vmax</option>
+
+            {/* Cartesian entry for Move L, or for Move J in cartesian mode */}
+            {block.src === "manual" && (((isMoveL) || block.moveMode === "cartesian")) && (
+              <HStack spacing={2} mb={2}>
+                <Text w="100px" fontSize="sm">
+                  Cartesian:
+                </Text>
+                <Input
+                  size="sm"
+                  placeholder="X, Y, Z, Rx, Ry, Rz"
+                  value={block.cartesian || ""}
+                  onChange={e => updateBlock(index, "cartesian", e.target.value)}
+                />
+              </HStack>
+            )}
+
+            {/* Joint entry for Move J when in joint mode */}
+            {block.src === "manual" && !isMoveL && block.moveMode === "joint" && (
+              <SimpleGrid columns={3} spacing={2} mb={2}>
+                {Array.from({ length: 6 }).map((_, j) => (
+                  <NumberInput
+                    key={j}
+                    size="sm"
+                    value={block.joints?.[j] ?? ""}
+                    onChange={val => {
+                      const joints = [...(block.joints || Array(6).fill(""))];
+                      joints[j] = val;
+                      updateBlock(index, "joints", joints);
+                    }}
+                  >
+                    <NumberInputField placeholder={`J${j + 1}`} />
+                  </NumberInput>
+                ))}
+              </SimpleGrid>
+            )}
+
+            {/* Reference Frame */}
+            <HStack spacing={2} mb={2}>
+              <Text w="100px" fontSize="sm">Reference:</Text>
+              <Select
+                size="sm"
+                value={block.referenceType || "World"}
+                onChange={e => updateBlock(index, "referenceType", e.target.value)}
+              >
+                <option value="World">World</option>
+                <option value="WObj">Work Object</option>
               </Select>
+              {block.referenceType === "WObj" && (
+                <Select
+                  size="sm"
+                  value={block.referenceObject || ""}
+                  onChange={e => updateBlock(index, "referenceObject", e.target.value)}
+                >
+                  <option value="">-- Select WObj --</option>
+                  {state.variables
+                    .filter(v => v.type.includes("Work Object"))
+                    .map((v, i) => (
+                      <option key={i} value={v.name}>{v.name}</option>
+                    ))}
+                </Select>
+              )}
             </HStack>
-            <HStack spacing={2} mb={1}>
-              <Text w="70px" fontSize="sm">
-                Zone:
+
+            {/* Speed */}
+            <HStack spacing={2} mb={2}>
+              <Text w="100px" fontSize="sm">
+                Speed ({isMoveL ? "mm/s" : "°/s"}):
               </Text>
-              <Select size="sm" value={block.zone || "Fine"} onChange={(e) => updateBlock(index, "zone", e.target.value)}>
-                <option value="Fine">Fine</option>
-                <option value="Coarse">Coarse</option>
-              </Select>
+              <NumberInput
+                size="sm"
+                value={block.speed || ""}
+                onChange={val => updateBlock(index, "speed", val)}
+              >
+                <NumberInputField />
+              </NumberInput>
             </HStack>
           </>
         );
+      }
       case "Home":
         return (
           <Text fontSize="xs" color="gray.300">
@@ -191,7 +536,7 @@ const BlockEditor = ({ state, dispatch, filter }) => {
                   value={block.io || ""}
                   onChange={e => updateBlock(index, "io", e.target.value)}
                 >
-                  {["DI 1", "DI 2", "DI 3", "DI 4", "DI 5"].map((opt) => (
+                  {["DI_1", "DI_2", "DI_3", "DI_4", "DI_5", "DI_6", "DI_7", "DI_8"].map((opt) => (
                     <option key={opt} value={opt}>{opt}</option>
                   ))}
                 </Select>
@@ -385,28 +730,84 @@ const BlockEditor = ({ state, dispatch, filter }) => {
           </>
         );
       }
-      case "Console Log":
+      case "Console Log": {
+        const vars = state.variables.map(v => v.name);
+        const handleMsgChange = e => {
+          const msg = e.target.value;
+          updateBlock(index, "message", msg);
+
+          // find $word just typed
+          const pos = e.target.selectionStart;
+          const prefix = msg.slice(0, pos).match(/\$([A-Za-z0-9_]*)$/);
+          if (prefix) {
+            const [full, partial] = prefix;
+            const suggestions = vars.filter(n => n.startsWith(partial));
+            setLogAutocomplete({
+              openForIndex: index,
+              replaceRange: [pos - full.length, pos],
+              suggestions,
+            });
+          } else {
+            setLogAutocomplete({ openForIndex: null, suggestions: [] });
+          }
+        };
+
+        const selectSuggestion = name => {
+          const { replaceRange: [start, end] } = logAutocomplete;
+          const old = block.message || "";
+          const filled = old.slice(0, start) + '$' + name + old.slice(end);
+          updateBlock(index, "message", filled);
+          setLogAutocomplete({ openForIndex: null, suggestions: [] });
+        };
+
+        // build a live preview
+        const preview = (block.message || "").replace(
+          /\$([A-Za-z0-9_]+)/g,
+          (_, n) => {
+            const find = state.variables.find(v => v.name === n);
+            return find ? find.value : `$${n}`;
+          }
+        );
+
         return (
           <>
-            <HStack spacing={2} mb={1}>
-              <Text w="70px" fontSize="sm">
-                Message:
+            <Popover
+              isOpen={logAutocomplete.openForIndex === index}
+              placement="bottom-start"
+              onClose={() => setLogAutocomplete({ openForIndex: null, suggestions: [] })}
+            >
+              <PopoverTrigger>
+                <Input
+                  size="sm"
+                  placeholder='console.log("…")'
+                  value={block.message || ""}
+                  onChange={handleMsgChange}
+                />
+              </PopoverTrigger>
+              <PopoverContent w="200px">
+                <PopoverArrow />
+                <PopoverBody p={1}>
+                  {logAutocomplete.suggestions.map(s => (
+                    <Box
+                      key={s}
+                      p={1}
+                      _hover={{ bg: "gray.100", cursor: "pointer" }}
+                      onClick={() => selectSuggestion(s)}
+                    >
+                      {s}
+                    </Box>
+                  ))}
+                </PopoverBody>
+              </PopoverContent>
+            </Popover>
+            {preview && (
+              <Text fontSize="xs" color="gray.400" mt={1}>
+                Preview: {preview}
               </Text>
-              <Input size="sm" placeholder="Enter log message" value={block.message || ""} onChange={(e) => updateBlock(index, "message", e.target.value)} />
-            </HStack>
-            <HStack spacing={2} mb={1}>
-              <Text w="70px" fontSize="sm">
-                Level:
-              </Text>
-              <Select size="sm" value={block.level || "info"} onChange={(e) => updateBlock(index, "level", e.target.value)}>
-                <option value="info">info</option>
-                <option value="warn">warn</option>
-                <option value="error">error</option>
-                <option value="log">log</option>
-              </Select>
-            </HStack>
+            )}
           </>
         );
+      }
       case "Else":
       case "End For":
         return (
@@ -414,79 +815,140 @@ const BlockEditor = ({ state, dispatch, filter }) => {
             No parameters required.
           </Text>
         );
+      case "Math":
+        return (
+          <MathEditor
+            block={block}
+            index={index}
+            variables={state.variables}
+            updateBlock={updateBlock}
+          />
+        );
       default:
         return null;
     }
   };
 
   return (
-    <Droppable droppableId="blocks" direction="vertical" isCombineEnabled={false} isDropDisabled={false} ignoreContainerClipping={false}>
+    <Droppable droppableId="blocks" direction="vertical">
       {(provided) => (
         <VStack
-          spacing={2}
-          flex="1"
           ref={provided.innerRef}
           {...provided.droppableProps}
-          minHeight="300px"
-          border="1px dashed"
-          borderRadius="lg"
-          borderColor="gray.400"
+          spacing={3}
           p={2}
+          minH="300px"
+          border="1px solid"
+          borderColor="gray.600"
+          borderRadius="md"
         >
-          {filteredBlocks.map((block, index) => (
-            <Draggable key={index} draggableId={String(index)} index={index}>
-              {(provided) => (
-                <Box
-                  ref={provided.innerRef}
-                  {...provided.draggableProps}
-                  {...provided.dragHandleProps}
-                  bg={blockColors[block.type] || "gray.800"}
-                  p={2}
-                  borderWidth="1px"
-                  borderRadius="md"
-                  width="100%"
-                >
-                  <HStack justify="space-between" mb={1}>
-                    <Text fontWeight="bold" fontSize="sm">
-                      {block.type}
-                    </Text>
-                    <HStack spacing={1}>
-                      <Tooltip label="Move Up" placement="top">
-                        <IconButton size="xs" onClick={() => moveBlockUp(index)} icon={<PiArrowUp />} />
-                      </Tooltip>
-                      <Tooltip label="Move Down" placement="top">
-                        <IconButton size="xs" onClick={() => moveBlockDown(index)} icon={<PiArrowDown />} />
-                      </Tooltip>
-                      <Tooltip label="Duplicate" placement="top">
-                        <IconButton size="xs" onClick={() => duplicateBlock(index)} icon={<PiCopy />} />
-                      </Tooltip>
-                      <Tooltip label="Collapse" placement="top">
-                        <Button size="xs" onClick={() => toggleCollapse(index)}>
-                          {collapsed[index] ? "Expand" : "Collapse"}
-                        </Button>
-                      </Tooltip>
-                      <Tooltip label="Delete" placement="top">
-                        <Button size="xs" bg="red.600" onClick={() => removeBlock(index)}>
-                          Del
-                        </Button>
-                      </Tooltip>
+          {visible.map(({ blk: block, i: origIdx }, visIdx) => {
+            const indent = indentLevels[origIdx] * 80;
+            return (
+              <Draggable
+                key={origIdx}
+                draggableId={`${origIdx}`}
+                index={visIdx}
+              >
+                {(prov) => (
+                  <Box
+                    ref={prov.innerRef}
+                    {...prov.draggableProps}
+                    {...prov.dragHandleProps}
+                    borderLeftWidth="8px"
+                    borderLeftColor={blockColors[block.type]}
+                    bg="gray.800"
+                    _hover={{ bg: "gray.700", boxShadow: "lg" }}
+                    transition={"background-color 0.1s, box-shadow 0.1s"}
+                    p={4}
+                    ml={`${indent}px`}
+                    w={`calc(100% - ${indent}px)`}
+                    borderRadius="md"
+                  >
+                    <HStack justify="space-between" align="start">
+                      <VStack align="start" spacing={1}>
+                        <Text fontWeight="bold" fontSize="xl">
+                          {block.type}
+                        </Text>
+                        {/* New summary badges */}
+                        {renderSummary(block, state.variables)}
+                      </VStack>
+                      <HStack spacing={1}>
+                        <Tooltip label="Move Up">
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              moveBlock(origIdx, origIdx - 1)
+                            }
+                          >
+                            <PiArrowUp />
+                          </Button>
+                        </Tooltip>
+                        <Tooltip label="Move Down">
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              moveBlock(origIdx, origIdx + 1)
+                            }
+                          >
+                            <PiArrowDown />
+                          </Button>
+                        </Tooltip>
+                        <Tooltip label="Duplicate">
+                          <Button
+                            size="sm"
+                            onClick={() => duplicateBlock(origIdx)}
+                          >
+                            <PiCopy />
+                          </Button>
+                        </Tooltip>
+                        <Popover placement="left" closeOnBlur>
+                          <PopoverTrigger>
+                            <Button size="sm" colorScheme="primary">
+                              <PiPencilSimple /> Edit
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent>
+                            <PopoverArrow />
+                            <PopoverCloseButton />
+                            <PopoverHeader>Edit {block.type}</PopoverHeader>
+                            <PopoverBody>
+                              {renderBlockParams(block, origIdx)}
+                              <Input
+                                mt={3}
+                                value={block.comment || ""}
+                                placeholder="Comment…"
+                                onChange={(e) =>
+                                  updateBlock(
+                                    origIdx,
+                                    "comment",
+                                    e.target.value
+                                  )
+                                }
+                              />
+                            </PopoverBody>
+                          </PopoverContent>
+                        </Popover>
+                        <Tooltip label="Delete">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            colorScheme="red"
+                            onClick={() => removeBlock(origIdx)}
+                          >
+                            <PiTrash />
+                          </Button>
+                        </Tooltip>
+                      </HStack>
                     </HStack>
-                  </HStack>
-                  {!collapsed[index] && (
-                    <Box>
-                      {renderBlockParams(block, index)}
-                      <Input mt={1} size="sm" placeholder="Add comment..." value={block.comment || ""} onChange={(e) => updateBlock(index, "comment", e.target.value)} />
-                    </Box>
-                  )}
-                </Box>
-              )}
-            </Draggable>
-          ))}
+                  </Box>
+                )}
+              </Draggable>
+            );
+          })}
           {provided.placeholder}
         </VStack>
       )}
     </Droppable>
   );
-};
-
-export default BlockEditor;
+}

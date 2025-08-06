@@ -1,5 +1,5 @@
 // src/components/Main/DataContext.js
-import React, { createContext, useContext, useMemo } from "react";
+import React, { createContext, useContext, useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useDigitalInputs,
@@ -14,6 +14,7 @@ import {
   useProfileLinear,
   useLinearMove,
   useLinearMoveToTeensy,
+  useProfileToTeensy,
 } from "./useUpdateData";
 import { useSocket } from "./SocketContext";
 
@@ -28,7 +29,11 @@ export const DataProvider = ({ children }) => {
   const { data: digitalInputs } = useDigitalInputs();
   const { data: digitalOutputs } = useDigitalOutputs();
   const { data: systemStatusObj = { status: "Idle", uptime: 0 } } = useSystemStatus();
-  const { data: jointStatuses = [] } = useJointStatuses();
+  const { data: rawJointStatuses } = useJointStatuses();
+  const jointStatuses = React.useMemo(
+    () => (Array.isArray(rawJointStatuses) ? rawJointStatuses : []),
+    [rawJointStatuses]
+  );
   const { data: parameters } = useParameters();
   const { fkPosition, fkOrientation } = useFk();
   const { data: logs } = useLogs();
@@ -70,7 +75,18 @@ export const DataProvider = ({ children }) => {
   const ikRequest = useIkRequest();
   const profileLinearEmit = useProfileLinear();
   const linearMoveEmit = useLinearMove();
-  const linearMoveTeeEmit = useLinearMoveToTeensy();
+  const linearMoveTeeMutation = useLinearMoveToTeensy();
+  const profileMutation = useProfileToTeensy();
+
+  // DataContext.js
+  useEffect(() => {
+    if (connected) {
+      listParameters();
+      getSystemStatus();
+      getJointStatus();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
 
   // memoize everything so consumers only re-render when actual data changes
   const value = useMemo(() => ({
@@ -99,7 +115,19 @@ export const DataProvider = ({ children }) => {
     getOutputs,
     getSystemStatus,
     getJointStatus: j => getJointStatus({ joint: j }),
-    getAllJointStatus: () => getJointStatus({}),
+    getAllJointStatus: () => new Promise((resolve) => {
+      if (!socket) return resolve(null);
+
+      socket.emit('cmd', { cmd: 'GetJointStatus' });
+
+      const handleResponse = (data) => {
+        qc.setQueryData(['jointStatuses'], data.data);
+        socket.off('jointStatusAll', handleResponse);
+        resolve(data.data);
+      };
+
+      socket.on('jointStatusAll', handleResponse);
+    }),
 
     move: (j, t, s, a) => move({ joint: j, target: t, speed: s, accel: a }),
     moveTo: (j, t, s, a) => moveTo({ joint: j, target: t, speed: s, accel: a }),
@@ -179,7 +207,24 @@ export const DataProvider = ({ children }) => {
     ikRequest,
     profileLinear: profileLinearEmit,
     linearMove: linearMoveEmit,
-    linearMoveToTeensy: linearMoveTeeEmit.mutate,
+    // wrap mutate so callers don’t have to know about useMutation internals
+    linearMoveToTeensy: (position, quaternion, speed, angular_speed_deg, accel) =>
+      linearMoveTeeMutation.mutate({
+        position,
+        quaternion,
+        speed,
+        angular_speed_deg,
+        accel,
+      }),
+
+    profileToTeensy: (position, quaternion, speed, angular_speed_deg, accel) =>
+      profileMutation.mutate({
+        position,
+        quaternion,
+        speed,
+        angular_speed_deg,
+        accel,
+      }),
 
     // isMoving virtually flags
     isMoving,
@@ -189,7 +234,8 @@ export const DataProvider = ({ children }) => {
   }), [
     socket, connected,
     digitalInputs, digitalOutputs, systemStatusObj.status, systemStatusObj.uptime,
-    jointStatuses, joints, parameters, fkPosition, fkOrientation, logs, isMoving
+    jointStatuses, joints, parameters, fkPosition, fkOrientation, logs, isMoving, linearMoveTeeMutation,
+    profileMutation,
   ]);
 
   return (

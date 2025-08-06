@@ -1,4 +1,3 @@
-// CommManager.h
 #ifndef COMM_MANAGER_H
 #define COMM_MANAGER_H
 
@@ -11,21 +10,45 @@
 #include "IOManager.h"
 #include "HelperManager.h"
 #include "PinDef.h"
-#include "Config.h"
+
+// —— sizes & limits ——
+static constexpr size_t CMD_BUF_SIZE = 256;
+static constexpr size_t RAW_QUEUE_MAX = 400;
+static constexpr size_t BATCH_MAX = 500;
+
+// —— one batch segment (all joints) ——
+struct BatchSegment
+{
+  float targets[CONFIG_JOINT_COUNT];
+  float speeds[CONFIG_JOINT_COUNT];
+  float accels[CONFIG_JOINT_COUNT];
+};
 
 class CommManager
 {
 public:
+  enum class State
+  {
+    IDLE,
+    LOADING,
+    EXECUTING
+  };
+
   static CommManager &instance();
 
-  /// Must be called once in setup()
+  /// Call once in setup()
   void begin(HardwareSerial &port);
 
-  /// Call each loop() to read incoming bytes
+  /// Always call each loop() to gather raw lines
   void poll();
-  /// Call each loop() after poll() to dispatch any completed message
-  void processIncoming();
-  void processQueue();
+
+  /// When not EXECUTING, parse & dispatch (or load) buffered lines
+  void processBufferedLines();
+
+  /// When EXECUTING, feed next batch segment
+  void handleBatchExecution();
+
+  State state() const { return _state; }
 
   /// Low-level sends
   void sendInputStatus();
@@ -36,12 +59,47 @@ public:
   void sendLog(const char *msg);
   void sendCallback(const char *cmd, bool ok, const char *errorMsg = nullptr);
 
+  int getPendingCmdId() const { return _pendingCmdId; }
+
 private:
   CommManager() = default;
-  /// Very thin dispatcher: looks at doc["cmd"] and calls one of these
+
+  // —— raw-line buffer ——
+  char _rawQueue[RAW_QUEUE_MAX][CMD_BUF_SIZE];
+  size_t _rqHead = 0, _rqTail = 0, _rqCount = 0;
+
+  // —— batch segments (in DMAMEM) ——
+  BatchSegment _batch[BATCH_MAX];
+  size_t _expected = 0, _loaded = 0, _index = 0;
+
+  // —— scratchpad for parsing ——
+  static StaticJsonDocument<2048> _json;
+
+  // —— serial staging ——
+  HardwareSerial *_serial = nullptr;
+  char _rxBuf[CMD_BUF_SIZE];
+  size_t _rxIdx = 0;
+
+  // —— FSM & ID echo ——
+  State _state = State::IDLE;
+  int _pendingCmdId = -1;
+
+  // —— helpers ——
+  void enqueueRaw(const char *line);
+  bool dequeueRaw(char *out);
+
+  // —— single-line JSON → FSM entry ——
+  void dispatchLine(const char *line);
+
+  // —— batch handlers ——
+  void handleBeginBatch(JsonObject &doc);
+  void handleBatchSegmentBatch(JsonObject &doc);
+  void handleAbortBatch(JsonObject & /*doc*/);
+
+  // —— legacy command dispatcher (your hash-switch) ——
   void dispatchCommand(JsonObject doc);
 
-  // — handlers for all supported cmd strings —
+  // —— all your original handlers ——
   void handleGetInputs(JsonObject &doc);
   void handleGetOutputs(JsonObject &doc);
   void handleGetSystemStatus(JsonObject &doc);
@@ -72,20 +130,14 @@ private:
   void handleRestart(JsonObject &doc);
   void handleListParameters(JsonObject &doc);
 
-  static constexpr size_t RX_BUF_SIZE = 256;
-  static constexpr size_t COMMAND_QUEUE_MAX = 1500;
-  char cmdQueue[COMMAND_QUEUE_MAX][RX_BUF_SIZE];
-  size_t queueHead = 0;
-  size_t queueTail = 0;
-  size_t queueCount = 0;
-
-  HardwareSerial *serial = nullptr;
-  char rxBuffer[RX_BUF_SIZE];
+  // —— original rx buffer (if you still need it) ——
+  static constexpr size_t VP_RX_BUF_SIZE = 512U;
+  static char rxBuffer[VP_RX_BUF_SIZE];
   size_t rxIndex = 0;
   bool msgReady = false;
 
-  bool enqueueCommand(const char *s);
-  bool dequeueCommand(char *outBuf);
+  uint32_t _dtUs = 0; // slice period in microseconds
+  uint32_t _lastExecUs = 0; // last time we stepped a slice
 };
 
 #endif // COMM_MANAGER_H

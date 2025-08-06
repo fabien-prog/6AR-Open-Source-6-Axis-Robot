@@ -1,249 +1,401 @@
-// CommManager.cpp
 #include "CommManager.h"
+#include "JointManager.h"
+#include "CalibrationManager.h"
+#include "SafetyManager.h"
+#include "IOManager.h"
+#include <ArduinoJson.h>
 
-static int _pendingCmdId = -1;
+// static JSON scratch
+StaticJsonDocument<2048> CommManager::_json;
+
+// FNV-1a helper (for dispatchCommand)
+static constexpr uint32_t FNV_OFFSET = 2166136261u;
+static constexpr uint32_t FNV_PRIME = 16777619u;
+
+// how many mini-steps per slice
+static constexpr uint8_t SUBDIVISIONS = 50;
+
+// batch-execution state
+static size_t _segIndex = 0;
+static uint8_t _substep = 0;
+static float _dtSec = 0.0f;
+static float _prevSpeeds[CONFIG_JOINT_COUNT];
+static float _accelPerSub[CONFIG_JOINT_COUNT];
+
+static constexpr uint32_t fnv1a(const char *s)
+{
+  uint32_t h = FNV_OFFSET;
+  while (*s)
+  {
+    h ^= uint8_t(*s++);
+    h *= FNV_PRIME;
+  }
+  return h;
+}
 
 CommManager &CommManager::instance()
 {
   static CommManager inst;
   return inst;
 }
-
-static inline void attachId(JsonDocument &d)
-{
-  if (_pendingCmdId >= 0)
-    d["id"] = _pendingCmdId;
-}
-
+// ——— begin() —————————————————————————————————————————————————
 void CommManager::begin(HardwareSerial &port)
 {
-  serial = &port;
+  _serial = &port;
   rxIndex = 0;
   msgReady = false;
-  Serial.begin(115200);
-  serial->begin(115200);
-  Serial.println("[CommManager] up @115200");
+  Serial.begin(921600);
+  _serial->begin(921600);
+  Serial.println("[CommManager] up @921600");
 }
 
 void CommManager::poll()
 {
-  if (!serial)
+  if (!_serial)
     return;
-
-  while (serial->available())
+  while (_serial->available())
   {
-    char c = serial->read();
+    char c = _serial->read();
     if (c == '\r')
-    {
-      // drop carriage‐return quietly
       continue;
-    }
     if (c == '\n')
     {
-      // end of one JSON line
-      rxBuffer[rxIndex] = '\0';
-      msgReady = true;
-      // immediately reset, so the next poll starts fresh
-      rxIndex = 0;
+      _rxBuf[_rxIdx] = '\0';
+      enqueueRaw(_rxBuf);
+      _rxIdx = 0;
+    }
+    else if (_rxIdx + 1 < CMD_BUF_SIZE)
+    {
+      _rxBuf[_rxIdx++] = c;
+    }
+  }
+}
+
+void CommManager::enqueueRaw(const char *line)
+{
+  if (_rqCount < RAW_QUEUE_MAX)
+  {
+    strcpy(_rawQueue[_rqTail], line);
+    _rqTail = (_rqTail + 1) % RAW_QUEUE_MAX;
+    _rqCount++;
+  }
+}
+
+bool CommManager::dequeueRaw(char *out)
+{
+  if (_rqCount == 0)
+    return false;
+  strcpy(out, _rawQueue[_rqHead]);
+  _rqHead = (_rqHead + 1) % RAW_QUEUE_MAX;
+  _rqCount--;
+  return true;
+}
+
+void CommManager::processBufferedLines()
+{
+  // don't parse while we're in the middle of EXECUTING a batch
+  if (_state == State::EXECUTING)
+    return;
+  char line[CMD_BUF_SIZE];
+  while (dequeueRaw(line))
+  {
+    dispatchLine(line);
+    if (_state == State::EXECUTING)
       break;
-    }
-    // only build up to RX_BUF_SIZE−1 chars
-    if (rxIndex < RX_BUF_SIZE - 1)
-    {
-      rxBuffer[rxIndex++] = c;
-    }
   }
 }
 
-bool CommManager::enqueueCommand(const char *s)
+void CommManager::dispatchLine(const char *line)
 {
-  if (queueCount >= COMMAND_QUEUE_MAX)
-    return false;
-  strncpy(cmdQueue[queueTail], s, RX_BUF_SIZE);
-  cmdQueue[queueTail][RX_BUF_SIZE - 1] = '\0';
-  queueTail = (queueTail + 1) % COMMAND_QUEUE_MAX;
-  ++queueCount;
-  return true;
-}
-
-// — pop the next queued line into outBuf, return false if empty
-bool CommManager::dequeueCommand(char *outBuf)
-{
-  if (queueCount == 0)
-    return false;
-  strcpy(outBuf, cmdQueue[queueHead]);
-  queueHead = (queueHead + 1) % COMMAND_QUEUE_MAX;
-  --queueCount;
-  return true;
-}
-
-void CommManager::processQueue()
-{
-  if (queueCount > 0)
-  {
-    StaticJsonDocument<64> peek;
-    if (!deserializeJson(peek, cmdQueue[queueHead]))
-    {
-      const char *cmd = peek["cmd"];
-      if (cmd && strcmp(cmd, "Restart") == 0)
-      {
-        // dequeue it…
-        char line[RX_BUF_SIZE];
-        dequeueCommand(line);
-        // …and dispatch it right now
-        StaticJsonDocument<256> root;
-        deserializeJson(root, line);
-        dispatchCommand(root.as<JsonObject>());
-        return; // don't process anything else
-      }
-    }
-  }
-  // 1) never dispatch anything while we’re homing
-  if (CalibrationManager::instance().isHoming())
-    return;
-
-  // 2) peek at the next queued line (without dequeuing yet)
-  bool nextIsMM = false;
-  if (queueCount > 0)
-  {
-    StaticJsonDocument<128> tmp;
-    if (!deserializeJson(tmp, cmdQueue[queueHead]))
-    {
-      const char *next = tmp["cmd"];
-      nextIsMM = (next && strcmp(next, "MoveMultiple") == 0);
-    }
-  }
-
-  // 3) only dequeue when:
-  //    - if it’s NOT a MoveMultiple, wait until no axis is moving
-  //    - if it IS a MoveMultiple, wait until we’re within LOOKAHEAD_STEPS of completion
-  const long LOOKAHEAD_STEPS = 75;
-  if (nextIsMM)
-  {
-    if (!JointManager::instance().allJointsNearTarget(LOOKAHEAD_STEPS))
-      return;
-  }
-  else
-  {
-    if (JointManager::instance().isAnyMoving())
-      return;
-  }
-
-  // 4) now safe to dequeue & dispatch
-  char line[RX_BUF_SIZE];
-  if (!dequeueCommand(line))
-    return;
-  StaticJsonDocument<512> json;
-  auto err = deserializeJson(json, line);
+  _json.clear();
+  auto err = deserializeJson(_json, line);
   if (err)
   {
-    sendError(err.c_str());
-  }
-  else
-  {
-    dispatchCommand(json.as<JsonObject>());
-  }
-}
-
-void CommManager::processIncoming()
-{
-  if (!msgReady)
-    return;
-
-  // 1) parse the incoming JSON
-  StaticJsonDocument<256> doc;
-  DeserializationError err = deserializeJson(doc, rxBuffer);
-  msgReady = false;
-  rxIndex = 0;
-
-  if (err)
-  {
-    sendError(err.c_str());
+    sendCallback("error", false, "parseFailed");
     return;
   }
-
+  JsonObject doc = _json.as<JsonObject>();
   const char *cmd = doc["cmd"];
-  if (!cmd)
-  {
-    sendCallback("missingCmd", false, "no cmd field");
-    return;
-  }
+  _pendingCmdId = doc.containsKey("id") ? doc["id"].as<int>() : -1;
 
-  // 2) Immediate dispatch for “status” commands:
-  if (strcmp(cmd, "GetJointStatus") == 0 ||
-      strcmp(cmd, "GetSystemStatus") == 0 ||
-      strcmp(cmd, "GetInputs") == 0 ||
-      strcmp(cmd, "GetOutputs") == 0 ||
-      strcmp(cmd, "ListParameters") == 0 ||
-      strcmp(cmd, "IsHoming") == 0 ||
-      strcmp(cmd, "Restart") == 0 ||
-      strcmp(cmd, "Stop") == 0 ||
-      strcmp(cmd, "StopAll") == 0)
+  if (_state == State::IDLE)
   {
-    // inside processIncoming() *right before* dispatchCommand(...)
-    _pendingCmdId = doc.containsKey("id") ? int(doc["id"]) : -1;
-    dispatchCommand(doc.as<JsonObject>());
-    _pendingCmdId = -1; // nobody waiting now
-    return;
+    if (strcmp(cmd, "BeginBatch") == 0)
+    {
+      handleBeginBatch(doc);
+    }
+    else
+    {
+      dispatchCommand(doc);
+    }
   }
+  else if (_state == State::LOADING)
+  {
+    if (strcmp(cmd, "M") == 0)
+    {
+      handleBatchSegmentBatch(doc);
+    }
+    else if (strcmp(cmd, "AbortBatch") == 0)
+    {
+      handleAbortBatch(doc);
+    }
+    else
+    {
+      sendCallback("error", false, "notLoadingBatch");
+    }
+  }
+  // if EXECUTING, we skip parsing entirely until the batch finishes
 
-  // 3) Everything else still goes into the queue
-  if (!enqueueCommand(rxBuffer))
-    sendError("Command queue full");
+  _pendingCmdId = -1;
 }
 
+// ——— low-level sends —————————————————————————————————————
+void CommManager::handleBeginBatch(JsonObject &doc)
+{
+  _expected = doc["count"].as<size_t>();
+  float dt = doc["dt"].as<float>();
+  if (_expected == 0 || _expected > BATCH_MAX || dt <= 0)
+  {
+    sendCallback("BeginBatch", false, "invalidCountOrDt");
+    return;
+  }
+  _dtSec = dt;
+  _dtUs = uint32_t(dt * 1e6f);
+
+  _loaded = 0;
+  _segIndex = 0;
+  _substep = 0;
+  for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
+  {
+    _prevSpeeds[j] = 0.0f;
+    _accelPerSub[j] = 0.0f;
+  }
+  _state = State::LOADING;
+  sendCallback("BeginBatch", true);
+}
+
+// ——— handleBatchSegmentBatch() ———————————————————————
+void CommManager::handleBatchSegmentBatch(JsonObject &doc)
+{
+  if (_loaded >= _expected)
+  {
+    sendCallback("SegmentError", false, "tooMany");
+    return;
+  }
+  auto arrS = doc["s"].as<JsonArray>();
+  auto arrA = doc["a"].as<JsonArray>();
+  if (arrS.size() != CONFIG_JOINT_COUNT || arrA.size() != CONFIG_JOINT_COUNT)
+  {
+    sendCallback("SegmentError", false, "badLength");
+    return;
+  }
+  for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
+  {
+    _batch[_loaded].speeds[j] = arrS[j].as<float>();
+    _batch[_loaded].accels[j] = arrA[j].as<float>();
+  }
+  _loaded++;
+  sendCallback("SegmentLoaded", true);
+
+  if (_loaded == _expected)
+  {
+    _state = State::EXECUTING;
+    _lastExecUs = micros();
+    sendCallback("BatchExecStart", true);
+  }
+}
+
+// ——— handleAbortBatch() —————————————————————————————————————
+void CommManager::handleAbortBatch(JsonObject &)
+{
+  _state = State::IDLE;
+  _loaded = _expected = _index = 0;
+  sendCallback("BatchAborted", true);
+}
+
+// ——— handleBatchExecution(): only feed next when motors idle —————
+void CommManager::handleBatchExecution()
+{
+  if (_state != State::EXECUTING)
+    return;
+
+  uint32_t now = micros();
+  if (now - _lastExecUs < _dtUs / SUBDIVISIONS)
+    return;
+  _lastExecUs = now;
+
+  // all done?
+  if (_segIndex >= _loaded)
+  {
+    _state = State::IDLE;
+    sendCallback("BatchComplete", true);
+    JointManager::instance().stopAll();
+    return;
+  }
+
+  // first sub-step of a slice: compute accel per mini-step
+  if (_substep == 0)
+  {
+    auto &seg = _batch[_segIndex];
+    for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
+    {
+      // full‐slice Δ-speed [deg/s] over dt: seg.accels[j]
+      _accelPerSub[j] = seg.accels[j] * _dtSec / float(SUBDIVISIONS);
+    }
+  }
+
+  // build arrays of speeds & accels for this mini-step
+  float speeds[CONFIG_JOINT_COUNT];
+  float accels[CONFIG_JOINT_COUNT];
+  for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
+  {
+    // ramp from previous slice‐end speed up by sub-increments
+    float newSpd = _prevSpeeds[j] + _accelPerSub[j] * float(_substep + 1);
+    speeds[j] = newSpd;
+    accels[j] = _accelPerSub[j];
+  }
+
+  float dt = _dtSec / float(SUBDIVISIONS);
+  // hand off the whole–robot slice in one call
+
+  // advance mini-step
+  if (++_substep >= SUBDIVISIONS)
+  {
+    // snap to final slice speed
+    for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
+    {
+      _prevSpeeds[j] = _batch[_segIndex].speeds[j];
+    }
+    _substep = 0;
+    _segIndex++;
+  }
+}
+
+// ——— sendCallback() ————————————————————————————————————————
+void CommManager::sendCallback(const char *cmd, bool ok, const char *err)
+{
+  StaticJsonDocument<64> d;
+  d["cmd"] = cmd;
+  d["status"] = ok ? "ok" : "error";
+  if (_pendingCmdId >= 0)
+    d["id"] = _pendingCmdId;
+  if (!ok && err)
+    d["error"] = err;
+  String out;
+  serializeJson(d, out);
+  if (_serial)
+    _serial->println(out);
+}
+
+// ——— dispatchCommand(): legacy hash↦handler ————————————————————
 void CommManager::dispatchCommand(JsonObject doc)
 {
-  // remember id (if any) for *every* command
-  _pendingCmdId = doc.containsKey("id") ? int(doc["id"]) : -1;
+  const char *cmd = doc["cmd"].as<const char *>();
+  _pendingCmdId = doc.containsKey("id") ? doc["id"].as<int>() : -1;
+  uint32_t h = fnv1a(cmd);
 
-  const char *cmd = doc["cmd"];
-  if (!cmd)
+  switch (h)
   {
-    sendCallback("missingCmd", false, "no cmd field");
-    _pendingCmdId = -1;
-    return;
-  }
-
-#define CMD(name) else if (strcmp(cmd, #name) == 0) handle##name(doc)
-  if (0)
-  {
-  }
-  CMD(GetInputs);
-  CMD(GetOutputs);
-  CMD(GetSystemStatus);
-  CMD(GetJointStatus);
-  CMD(Move);
-  CMD(MoveTo);
-  CMD(MoveBy);
-  CMD(MoveMultiple);
-  CMD(Jog);
-  CMD(Stop);
-  CMD(StopAll);
-  CMD(Home);
-  CMD(AbortHoming);
-  CMD(IsHoming);
-  CMD(SetParam);
-  CMD(GetParam);
-  CMD(SetSoftLimits);
-  CMD(GetSoftLimits);
-  CMD(SetMaxSpeed);
-  CMD(GetMaxSpeed);
-  CMD(SetMaxAccel);
-  CMD(GetMaxAccel);
-  CMD(SetHomeOffset);
-  CMD(GetHomeOffset);
-  CMD(SetPositionFactor);
-  CMD(GetPositionFactor);
-  CMD(Output);
-  CMD(Restart);
-  CMD(ListParameters);
-  else
-  {
+  case fnv1a("GetInputs"):
+    handleGetInputs(doc);
+    break;
+  case fnv1a("GetOutputs"):
+    handleGetOutputs(doc);
+    break;
+  case fnv1a("GetSystemStatus"):
+    handleGetSystemStatus(doc);
+    break;
+  case fnv1a("GetJointStatus"):
+    handleGetJointStatus(doc);
+    break;
+  case fnv1a("Move"):
+    handleMove(doc);
+    break;
+  case fnv1a("MoveTo"):
+    handleMoveTo(doc);
+    break;
+  case fnv1a("MoveBy"):
+    handleMoveBy(doc);
+    break;
+  case fnv1a("MoveMultiple"):
+    handleMoveMultiple(doc);
+    break;
+  case fnv1a("Jog"):
+    handleJog(doc);
+    break;
+  case fnv1a("Stop"):
+    handleStop(doc);
+    break;
+  case fnv1a("StopAll"):
+    handleStopAll(doc);
+    break;
+  case fnv1a("Home"):
+    handleHome(doc);
+    break;
+  case fnv1a("AbortHoming"):
+    handleAbortHoming(doc);
+    break;
+  case fnv1a("IsHoming"):
+    handleIsHoming(doc);
+    break;
+  case fnv1a("SetParam"):
+    handleSetParam(doc);
+    break;
+  case fnv1a("GetParam"):
+    handleGetParam(doc);
+    break;
+  case fnv1a("SetSoftLimits"):
+    handleSetSoftLimits(doc);
+    break;
+  case fnv1a("GetSoftLimits"):
+    handleGetSoftLimits(doc);
+    break;
+  case fnv1a("SetMaxSpeed"):
+    handleSetMaxSpeed(doc);
+    break;
+  case fnv1a("GetMaxSpeed"):
+    handleGetMaxSpeed(doc);
+    break;
+  case fnv1a("SetMaxAccel"):
+    handleSetMaxAccel(doc);
+    break;
+  case fnv1a("GetMaxAccel"):
+    handleGetMaxAccel(doc);
+    break;
+  case fnv1a("SetHomeOffset"):
+    handleSetHomeOffset(doc);
+    break;
+  case fnv1a("GetHomeOffset"):
+    handleGetHomeOffset(doc);
+    break;
+  case fnv1a("SetPositionFactor"):
+    handleSetPositionFactor(doc);
+    break;
+  case fnv1a("GetPositionFactor"):
+    handleGetPositionFactor(doc);
+    break;
+  case fnv1a("Output"):
+    handleOutput(doc);
+    break;
+  case fnv1a("Restart"):
+    handleRestart(doc);
+    break;
+  case fnv1a("ListParameters"):
+    handleListParameters(doc);
+    break;
+  default:
     sendCallback("unknownCmd", false, cmd);
+    break;
   }
-#undef CMD
-  _pendingCmdId = -1; // done — stop echoing
+
+  _pendingCmdId = -1;
+}
+
+static inline void attachId(JsonDocument &d)
+{
+  int id = CommManager::instance().getPendingCmdId();
+  if (id >= 0)
+    d["id"] = id;
 }
 
 // ——— Handlers ———————————————————————————————————
@@ -263,7 +415,7 @@ void CommManager::handleGetInputs(JsonObject &)
   attachId(doc);
   String out;
   serializeJson(doc, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleGetOutputs(JsonObject &)
@@ -278,7 +430,7 @@ void CommManager::handleGetOutputs(JsonObject &)
   attachId(doc); // <-- add this line
   String out;
   serializeJson(doc, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleGetSystemStatus(JsonObject &)
@@ -292,7 +444,7 @@ void CommManager::handleGetSystemStatus(JsonObject &)
   attachId(doc);
   String out;
   serializeJson(doc, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleGetJointStatus(JsonObject &doc)
@@ -317,7 +469,7 @@ void CommManager::handleGetJointStatus(JsonObject &doc)
       attachId(pd);
       String out;
       serializeJson(pd, out);
-      serial->println(out);
+      _serial->println(out);
       return;
     }
     // otherwise fall back to the single-joint response
@@ -327,6 +479,19 @@ void CommManager::handleGetJointStatus(JsonObject &doc)
       sendCallback("jointStatus", false, "invalid joint");
       return;
     }
+    // **NEW**: send the single-joint response
+    StaticJsonDocument<256> pd;
+    pd["cmd"] = "jointStatus";
+    auto data = pd.createNestedObject("data");
+    data["joint"] = j + 1;
+    data["position"] = JointManager::instance().getPosition(j);
+    data["velocity"] = JointManager::instance().getSpeed(j);
+    data["acceleration"] = JointManager::instance().getAccel(j);
+    data["target"] = JointManager::instance().getTarget(j);
+    attachId(pd);
+    String out;
+    serializeJson(pd, out);
+    _serial->println(out);
   }
 }
 
@@ -343,7 +508,7 @@ void CommManager::handleMoveTo(JsonObject &doc)
   float tgt = doc["target"].as<float>();
   float spd = doc["speed"].as<float>();
   float acc = doc["accel"].as<float>();
-  bool ok = JointManager::instance().moveTo(j, tgt, spd, acc);
+  bool ok = JointManager::instance().move(j, tgt, spd, acc);
   sendCallback("moveTo", ok, ok ? nullptr : "invalid/moving/estop");
 }
 
@@ -353,8 +518,12 @@ void CommManager::handleMoveBy(JsonObject &doc)
   float d = doc["delta"].as<float>();
   float spd = doc["speed"].as<float>();
   float acc = doc["accel"].as<float>();
-  bool ok = JointManager::instance().moveBy(j, d, spd, acc);
-  sendCallback("moveBy", ok, ok ? nullptr : "invalid");
+
+  // compute absolute target = current + delta
+  float cur = JointManager::instance().getPosition(j);
+  bool ok = JointManager::instance().move(j, cur + d, spd, acc);
+  sendCallback("moveBy", ok, ok ? nullptr : "invalid/moving/estop");
+  return;
 }
 
 void CommManager::handleMoveMultiple(JsonObject &doc)
@@ -364,45 +533,54 @@ void CommManager::handleMoveMultiple(JsonObject &doc)
   auto spds = doc["speeds"].as<JsonArray>();
   auto acs = doc["accels"].as<JsonArray>();
 
-  if (js.size() != tgts.size() || js.size() != spds.size() || js.size() != acs.size())
+  if (js.size() != tgts.size() ||
+      js.size() != spds.size() ||
+      js.size() != acs.size())
   {
     sendCallback("moveMultiple", false, "length mismatch");
     return;
   }
 
-  // blending logic unchanged
-  bool blending = false;
-  if (queueCount > 0)
-  { /* … */
-  }
-
+  bool allOk = true;
   for (size_t i = 0; i < js.size(); ++i)
   {
     int j = js[i].as<int>() - 1;
     if (j < 0 || j >= CONFIG_JOINT_COUNT)
+    {
+      allOk = false;
       continue;
+    }
 
     float tgt = tgts[i].as<float>();
     float spd = spds[i].as<float>();
     float acc = acs[i].as<float>();
 
-    // pass the real accel each segment
-    JointManager::instance().runJoint(j, tgt, spd, acc, true);
-    sendCallback("moveMultiple", true);
+    // schedule a relative move on each axis
+    bool ok = JointManager::instance().move(j, tgt, spd, acc);
+    allOk &= ok;
   }
-}
 
+  sendCallback("moveMultiple",
+               allOk,
+               allOk ? nullptr : "invalid/moving/estop");
+}
 void CommManager::handleJog(JsonObject &doc)
 {
   int j = doc["joint"].as<int>() - 1;
-  float spd = doc["speed"].as<float>();
-  bool ok = JointManager::instance().jogJoint(j, spd);
-  sendCallback("jog", ok);
+  if (j < 0 || j >= CONFIG_JOINT_COUNT)
+  {
+    sendCallback("jog", false, "invalid joint");
+    return;
+  }
+  float targetV = doc["target"].as<float>();
+  float accel = doc["accel"].as<float>();
+  bool ok = JointManager::instance().jog(j, targetV, accel);
+  sendCallback("jog", ok, ok ? nullptr : "invalid/moving/estop");
 }
 void CommManager::handleStop(JsonObject &doc)
 {
   int j = doc["joint"].as<int>() - 1;
-  JointManager::instance().stopJoint(j);
+  JointManager::instance().stopAll();
   sendCallback("stop", true);
 }
 void CommManager::handleStopAll(JsonObject &)
@@ -431,7 +609,7 @@ void CommManager::handleIsHoming(JsonObject &)
   attachId(doc);
   String out;
   serializeJson(doc, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleSetParam(JsonObject &doc)
@@ -457,7 +635,7 @@ void CommManager::handleGetParam(JsonObject &doc)
   attachId(pd);
   String out;
   serializeJson(pd, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleSetSoftLimits(JsonObject &doc)
@@ -484,7 +662,7 @@ void CommManager::handleGetSoftLimits(JsonObject &doc)
   attachId(pd);
   String out;
   serializeJson(pd, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleSetMaxSpeed(JsonObject &doc)
@@ -504,7 +682,7 @@ void CommManager::handleGetMaxSpeed(JsonObject &doc)
   attachId(pd);
   String out;
   serializeJson(pd, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleSetMaxAccel(JsonObject &doc)
@@ -524,7 +702,7 @@ void CommManager::handleGetMaxAccel(JsonObject &doc)
   attachId(pd);
   String out;
   serializeJson(pd, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleSetHomeOffset(JsonObject &doc)
@@ -551,7 +729,7 @@ void CommManager::handleListParameters(JsonObject &)
   attachId(doc); //  ← add this
   String out;
   serializeJson(doc, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleGetHomeOffset(JsonObject &doc)
@@ -566,7 +744,7 @@ void CommManager::handleGetHomeOffset(JsonObject &doc)
   attachId(pd);
   String out;
   serializeJson(pd, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleSetPositionFactor(JsonObject &doc)
@@ -589,7 +767,7 @@ void CommManager::handleGetPositionFactor(JsonObject &doc)
   attachId(pd);
   String out;
   serializeJson(pd, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleOutput(JsonObject &doc)
@@ -627,23 +805,8 @@ void CommManager::sendLog(const char *msg)
   doc["data"] = msg;
   String out;
   serializeJson(doc, out);
-  if (serial)
-    serial->println(out);
-}
-
-// ───────── sendCallback stays exactly as in your draft ─────────
-void CommManager::sendCallback(const char *cmd, bool ok, const char *err)
-{
-  StaticJsonDocument<128> doc;
-  doc["cmd"] = cmd;
-  doc["status"] = ok ? "ok" : "error";
-  if (_pendingCmdId >= 0)
-    doc["id"] = _pendingCmdId; // <-- echo!
-  if (!ok && err)
-    doc["error"] = err;
-  String out;
-  serializeJson(doc, out);
-  serial->println(out);
+  if (_serial)
+    _serial->println(out);
 }
 
 void CommManager::sendInputStatus()
@@ -667,7 +830,7 @@ void CommManager::sendInputStatus()
   attachId(doc);
   String out;
   serializeJson(doc, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::sendHomingResponse(size_t joint, float minPos, float maxPos)
@@ -681,7 +844,7 @@ void CommManager::sendHomingResponse(size_t joint, float minPos, float maxPos)
   attachId(doc);
   String out;
   serializeJson(doc, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::sendJointStatus(size_t joint)
@@ -702,7 +865,7 @@ void CommManager::sendJointStatus(size_t joint)
   attachId(doc);
   String out;
   serializeJson(doc, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::sendSystemStatus()
@@ -716,7 +879,7 @@ void CommManager::sendSystemStatus()
   attachId(doc);
   String out;
   serializeJson(doc, out);
-  serial->println(out);
+  _serial->println(out);
 }
 
 void CommManager::handleRestart(JsonObject &)
