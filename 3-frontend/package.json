@@ -23,10 +23,12 @@
     "electron-squirrel-startup": "^1.0.1",
     "express": "^5.1.0",
     "framer-motion": "^12.5.0",
+    "highlight.js": "^11.11.1",
     "kinematics": "^1.0.2",
     "kinematics-js": "^1.0.8",
     "mathjs": "^14.3.1",
     "next-themes": "^0.4.6",
+    "r3f-perf": "^7.2.3",
     "react": "^19.0.0",
     "react-beautiful-dnd": "^13.1.1",
     "react-dom": "^19.0.0",
@@ -39,26 +41,28 @@
     "three": "^0.174.0",
     "three-ik": "^0.1.0",
     "urdf-loader": "^0.12.4",
-    "web-vitals": "^2.1.4"
+    "web-vitals": "^2.1.4",
+    "zustand": "^5.0.7"
   },
   "homepage": "./",
-  "main": "public/electron.js",
+  "main": "main.js",
   "scripts": {
     "start": "concurrently \"npm run start:react\" \"wait-on http://localhost:3000 && npm run start:electron\"",
     "start:react": "react-scripts start",
     "start:electron": "electron main.js",
     "build": "react-scripts build",
     "electron:start": "electron main.js",
-    "electron:build": "electron-builder",
+    "electron:build": "npm run build && electron-builder",
     "preelectron-pack": "npm run build",
-    "electron-pack": "build --em.main=build/main.js"
+    "electron-pack": "build --em.main=build/main.js",
+    "package": "electron-forge package",
+    "make": "electron-forge make"
   },
   "build": {
     "appId": "com.mycompany.myapp",
     "productName": "MyElectronApp",
     "files": [
       "build/**/*",
-      "node_modules/**/*",
       "public/**/*"
     ],
     "directories": {
@@ -92,10 +96,17 @@
     ]
   },
   "devDependencies": {
+    "@electron-forge/cli": "^7.8.3",
+    "@electron-forge/maker-deb": "^7.8.3",
+    "@electron-forge/maker-rpm": "^7.8.3",
+    "@electron-forge/maker-squirrel": "^7.8.3",
+    "@electron-forge/maker-zip": "^7.8.3",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.8.3",
+    "@electron-forge/plugin-fuses": "^7.8.3",
+    "@electron/fuses": "^1.8.0",
     "ajv": "^8.17.1",
     "concurrently": "^9.2.0",
     "electron": "^35.0.2",
-    "electron-builder": "^25.1.8",
     "wait-on": "^8.0.3",
     "webpack-cli": "^6.0.1"
   }

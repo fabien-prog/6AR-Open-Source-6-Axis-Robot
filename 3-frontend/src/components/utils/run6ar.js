@@ -1,6 +1,3 @@
-// src/components/utils/run6ar.js
-
-// Generator‐based 6AR “interpreter” with line‐number annotations
 export function* run6ar(code) {
     const rawLines = code.split(/\r?\n/);
     const lines = rawLines.map((l) => l.trim());
@@ -15,29 +12,40 @@ export function* run6ar(code) {
         // Declarations before PROC Main
         while (i < lines.length && lines[i] && !lines[i].startsWith("PROC Main")) {
             const l = lines[i++];
+            if (!l) continue;
             let m;
 
             if ((m = l.match(/^CONST Number (\w+) = (.+);$/))) {
                 vars[m[1]] = Number(m[2]);
+                continue;
             }
-            else if ((m = l.match(/^VAR Number (\w+) = (.+);$/))) {
+            if ((m = l.match(/^VAR Number (\w+) = (.+);$/))) {
                 vars[m[1]] = Number(m[2]);
+                continue;
             }
-            else if ((m = l.match(/^VAR Coordinate (\w+) = \(([^)]+)\);$/))) {
-                const [x, y, z, rx, ry, rz] = m[2].split(",").map(parseFloat);
+            if ((m = l.match(/^VAR Coordinate (\w+) = \(([^)]+)\);$/))) {
+                // minimal parsing (fast split)
+                const parts = m[2].split(",");
+                const x = parseFloat(parts[0]),
+                    y = parseFloat(parts[1]),
+                    z = parseFloat(parts[2]),
+                    rx = parseFloat(parts[3]),
+                    ry = parseFloat(parts[4]),
+                    rz = parseFloat(parts[5]);
                 coords[m[1]] = { x, y, z, rx, ry, rz };
+                continue;
             }
         }
 
         // Skip the "PROC Main()" line
         i++;
 
-        // Recursive block parser
         function parseBlock(endTokens) {
             const stmts = [];
             while (i < lines.length) {
                 const lineIndex = i;
-                const l = lines[i++];
+                const l = lines[i++] || "";
+                if (!l) continue;
 
                 // break on any of the endTokens
                 if (endTokens.includes(l)) break;
@@ -45,13 +53,16 @@ export function* run6ar(code) {
                 let m;
                 if ((m = l.match(/^LOG\("(.+)"\);$/))) {
                     stmts.push({ t: "LOG", msg: m[1], line: lineIndex });
-                }
-                else if (l === "Home;") {
-                    stmts.push({ t: "Home", line: lineIndex });
+                    continue;
                 }
 
-                // ─── MoveL Cartesian TARGET Speed N
-                else if ((m = l.match(/^MoveL Cartesian (\w+) Speed (\d+);$/))) {
+                if (l === "Home;") {
+                    stmts.push({ t: "Home", line: lineIndex });
+                    continue;
+                }
+
+                // MoveL Cartesian TARGET Speed N
+                if ((m = l.match(/^MoveL Cartesian (\w+) Speed (\d+);$/))) {
                     stmts.push({
                         t: "MoveL",
                         mode: "Cartesian",
@@ -59,25 +70,23 @@ export function* run6ar(code) {
                         speed: +m[2],
                         line: lineIndex,
                     });
+                    continue;
                 }
 
-                // ─── MoveJ Cartesian|Joint TARGET Speed N
-                else if (
-                    (m = l.match(
-                        /^MoveJ (Cartesian|Joint) (\w+) Speed (\d+);$/
-                    ))
-                ) {
+                // MoveJ Cartesian|Joint TARGET Speed N
+                if ((m = l.match(/^MoveJ (Cartesian|Joint) (\w+) Speed (\d+);$/))) {
                     stmts.push({
                         t: "MoveJ",
-                        mode: m[1],          // now captures either "Cartesian" or "Joint"
+                        mode: m[1],
                         target: m[2],
                         speed: +m[3],
                         line: lineIndex,
                     });
+                    continue;
                 }
 
-                // ─── IF … THEN … ENDIF;
-                else if ((m = l.match(/^IF (\w+) == (\d+) THEN$/))) {
+                // IF … THEN … ENDIF;
+                if ((m = l.match(/^IF (\w+) == (\d+) THEN$/))) {
                     const body = parseBlock(["ENDIF;"]);
                     stmts.push({
                         t: "If",
@@ -86,24 +95,26 @@ export function* run6ar(code) {
                         body,
                         line: lineIndex,
                     });
+                    continue;
                 }
 
-                // ─── FOR … FROM … TO … STEP …
-                else if ((m = l.match(/^FOR (\w+) FROM (\d+) TO (\w+) STEP (\d+)/))) {
+                // FOR … FROM … TO … STEP …
+                if ((m = l.match(/^FOR (\w+) FROM (\d+) TO (\w+) STEP (\d+)/))) {
                     const body = parseBlock(["ENDFOR;"]);
                     stmts.push({
                         t: "For",
                         counter: m[1],
                         start: +m[2],
-                        endToken: m[3],   // name‐or‐number
+                        endToken: m[3], // name‐or‐number
                         step: +m[4],
                         body,
                         line: lineIndex,
                     });
+                    continue;
                 }
 
-                // ─── Counter … (unchanged)
-                else if ((m = l.match(/^Counter (\w+) INIT (\d+) INC (\d+) TO (\d+);$/))) {
+                // Counter …
+                if ((m = l.match(/^Counter (\w+) INIT (\d+) INC (\d+) TO (\d+);$/))) {
                     stmts.push({
                         t: "Counter",
                         name: m[1],
@@ -112,17 +123,21 @@ export function* run6ar(code) {
                         to: +m[4],
                         line: lineIndex,
                     });
+                    continue;
                 }
 
-                // ─── Assign math (unchanged)
-                else if ((m = l.match(/^(\w+)\s*:=\s*(.+);$/))) {
+                // Assign math
+                if ((m = l.match(/^(\w+)\s*:=\s*(.+);$/))) {
                     stmts.push({
                         t: "Assign",
                         varName: m[1],
                         expr: m[2],
                         line: lineIndex,
                     });
+                    continue;
                 }
+
+                // ignore unknown/blank lines silently for speed
             }
             return stmts;
         }
@@ -217,7 +232,6 @@ export function* run6ar(code) {
                         message: `FOR ${s.counter} from ${s.start} to ${endVal} step ${s.step}`,
                         line: s.line,
                     };
-                    // ← inclusive loop: start … endVal, step
                     for (let v = s.start; v <= endVal; v += s.step) {
                         ctx.vars[s.counter] = v;
                         yield {
@@ -281,11 +295,8 @@ export function* run6ar(code) {
                 }
 
                 default:
-                    yield {
-                        type: "error",
-                        message: `Unknown statement type: ${s.t}`,
-                        line: s.line,
-                    };
+                    // ignore unknown for speed; emit an error if you prefer:
+                    // yield { type: "error", message: `Unknown statement type: ${s.t}`, line: s.line };
                     break;
             }
         }

@@ -1,4 +1,3 @@
-// src/components/tabs/MoveAxisTab.jsx
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Box, Grid, Heading,
@@ -14,24 +13,30 @@ import * as THREE from "three";
 import RobotLoader from "../Main/RobotLoader";
 import { useData } from "../Main/DataContext";
 import AddStlModal from "../modals/AddSTLModal";
+import { movePhysicalToVirtual } from "../utils/syncMotion";
+import { useJointStore } from "../utils/store";
 
 export default function MoveAxisTab() {
   const {
     socket,
     getAllJointStatus,
     ikRequest,
-    joints,
     fkPosition = [],
     fkOrientation = [],
-    linearMove,         // ← streaming API
-    profileLinear,      // ← batched API (no-ack, we listen for response events)
-    setIsMoving,        // ← toggle global “moving” flag
+    linearMove,
+    profileLinear,
+    setIsMoving,
     moveMultiple,
     parameters,
   } = useData();
 
+  // Zustand joint store (degrees)
+  const storeAngles = useJointStore((s) => s.angles);
+  const setAngles = useJointStore((s) => s.setAngles);
+
   const toast = useToast();
   const initialSync = useRef(true);
+  const debounceTimer = useRef(null);
 
   // — Pose editor inputs —
   const [posX, setPosX] = useState("0");
@@ -51,28 +56,33 @@ export default function MoveAxisTab() {
   const [lmSpeed, setLmSpeed] = useState("0.1");
   const [lmAccel, setLmAccel] = useState("0.1");
 
-  const debounceTimer = useRef(null);
-
-  // — Extras, joint state, simulation flags —
+  // — Extras & streaming flags —
   const [extras, setExtras] = useState([]);
-  const [poseJoints, setPoseJoints] = useState(joints);
-  const [simJoints, setSimJoints] = useState(null);
-  const [isSimulating, setIsSimulating] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isProfiling, setIsProfiling] = useState(false);
 
-  // refs for profile playback
-  const profileRef = useRef({ positions: [], idx: 0, timer: null, dt: 0, final: [] });
+  // Profile playback ref
+  const profileRef = useRef({
+    positions: [],
+    idx: 0,
+    timer: null,
+    dt: 0,
+    final: [],
+    targetCartesian: {},
+  });
 
-  // seed pose‐editor from FK once
+  // Seed pose editor from FK once
   useEffect(() => {
-    if (initialSync.current) { initialSync.current = false; return; }
+    if (initialSync.current) {
+      initialSync.current = false;
+      return;
+    }
     if (fkPosition.length === 3) {
       setPosX((fkPosition[0] * 1000).toFixed(3));
       setPosY((fkPosition[1] * 1000).toFixed(3));
       setPosZ((fkPosition[2] * 1000).toFixed(3));
     }
-    if (fkOrientation.length === 3 && fkOrientation.every(r => Array.isArray(r))) {
+    if (fkOrientation.length === 3 && fkOrientation.every((r) => Array.isArray(r))) {
       const m = new THREE.Matrix4().set(
         fkOrientation[0][0], fkOrientation[0][1], fkOrientation[0][2], 0,
         fkOrientation[1][0], fkOrientation[1][1], fkOrientation[1][2], 0,
@@ -86,7 +96,7 @@ export default function MoveAxisTab() {
     }
   }, [fkPosition, fkOrientation]);
 
-  // apply IK whenever pose‐editor fields change
+  // Apply IK when pose editor fields change (debounced)
   const applyPose = useCallback(() => {
     const [x, y, z, a, b, c] = [posX, posY, posZ, angA, angB, angC].map(parseFloat);
     if ([x, y, z, a, b, c].some(isNaN)) return;
@@ -100,7 +110,6 @@ export default function MoveAxisTab() {
     ikRequest([x / 1000, y / 1000, z / 1000], [q.x, q.y, q.z, q.w]);
   }, [posX, posY, posZ, angA, angB, angC, ikRequest]);
 
-  // schedule IK 500ms after last change
   const scheduleApplyPose = useCallback(() => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = window.setTimeout(() => {
@@ -109,25 +118,31 @@ export default function MoveAxisTab() {
     }, 50);
   }, [applyPose]);
 
-  // IK replies ⇒ update virtual pose
+  useEffect(() => {
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, []);
+
+  // IK responses → write to store (degrees)
   useEffect(() => {
     if (!socket) return;
-    const onIk = msg => {
+    const onIk = (msg) => {
       if (msg.error) {
         toast({ title: "IK error", description: msg.error, status: "error" });
       } else if (Array.isArray(msg.angles)) {
-        setPoseJoints(msg.angles);
+        setAngles([...msg.angles]); // pass a fresh array
       }
     };
     socket.on("ik_response", onIk);
-    return () => { socket.off("ik_response", onIk); };
-  }, [socket, toast]);
+    return () => {
+      socket.off("ik_response", onIk);
+    };
+  }, [socket, toast, setAngles]);
 
-  // — Interpolation (streaming) — send final via linearMove, listen to linearMove events
+  // Linear move (server streams angles)
   const doLinearMove = () => {
     setIsStreaming(true);
-    setIsSimulating(true);
-    // build final from lm*
     const [x, y, z, a, b, c] = [lmX, lmY, lmZ, lmA, lmB, lmC].map(parseFloat);
     const e = new THREE.Euler(
       THREE.MathUtils.degToRad(a),
@@ -147,14 +162,9 @@ export default function MoveAxisTab() {
 
   useEffect(() => {
     if (!socket) return;
-    const onAngles = angles => {
-      if (isSimulating) setSimJoints(angles);
-    };
+    const onAngles = (angles) => setAngles([...angles]);
     const onDone = () => {
       setIsStreaming(false);
-      setIsSimulating(false);
-      setPoseJoints(simJoints);
-      setSimJoints(null);
       toast({ title: "Interpolation done", status: "success" });
     };
     socket.on("linearMove", onAngles);
@@ -163,9 +173,9 @@ export default function MoveAxisTab() {
       socket.off("linearMove", onAngles);
       socket.off("linearMoveComplete", onDone);
     };
-  }, [socket, isSimulating, simJoints, toast]);
+  }, [socket, setAngles, toast]);
 
-  // — Profile (batched) — send via profileLinear, receive profileLinear_response, then play back
+  // Profile (batched) — we play back locally by pushing steps to the store
   const doComputeProfile = () => {
     setIsProfiling(true);
     setIsMoving?.(true);
@@ -179,7 +189,6 @@ export default function MoveAxisTab() {
       c: parseFloat(lmC),
     };
 
-    // build the request exactly as before…
     const [x, y, z, a, b, c] = [lmX, lmY, lmZ, lmA, lmB, lmC].map(parseFloat);
     const e = new THREE.Euler(
       THREE.MathUtils.degToRad(a),
@@ -199,9 +208,9 @@ export default function MoveAxisTab() {
   useEffect(() => {
     if (!socket) return;
 
-    let playbackTimer = null;    // <- local capture
+    let playbackTimer = null;
 
-    const onProfile = msg => {
+    const onProfile = (msg) => {
       setIsProfiling(false);
 
       const { initial = [], final = [], dt = 0.02, speeds = [] } = msg;
@@ -211,27 +220,24 @@ export default function MoveAxisTab() {
         return;
       }
 
-      // build positions…
+      // integrate velocities → positions (degrees)
       const positions = [];
       let qdeg = initial.slice();
       positions.push(qdeg.slice());
-      speeds.forEach(vdeg => {
+      speeds.forEach((vdeg) => {
         qdeg = qdeg.map((qi, j) => qi + vdeg[j] * dt);
         positions.push(qdeg.slice());
       });
+
       profileRef.current.positions = positions;
       profileRef.current.idx = 0;
       profileRef.current.final = final;
 
-      setIsSimulating(true);
-
-      // kick off the timer, but store it locally
       playbackTimer = setInterval(() => {
         const i = profileRef.current.idx;
         if (i >= profileRef.current.positions.length) {
           clearInterval(playbackTimer);
-          setIsSimulating(false);
-          setPoseJoints(final);
+          setAngles([...profileRef.current.final]);
 
           // update pose‐editor fields too
           const { x, y, z, a, b, c } = profileRef.current.targetCartesian;
@@ -242,11 +248,10 @@ export default function MoveAxisTab() {
           setAngB(b.toFixed(1));
           setAngC(c.toFixed(1));
 
-          setSimJoints(null);
           toast({ title: "Profile done", status: "success" });
           setIsMoving?.(false);
         } else {
-          setSimJoints(profileRef.current.positions[i]);
+          setAngles([...profileRef.current.positions[i]]);
           profileRef.current.idx += 1;
         }
       }, dt * 1000);
@@ -265,106 +270,81 @@ export default function MoveAxisTab() {
       socket.off("profileLinear_error", onError);
       if (playbackTimer) clearInterval(playbackTimer);
     };
-  }, [socket, toast, setIsMoving]);
+  }, [socket, toast, setAngles, setIsMoving]);
 
-  const movePhysicalToVirtual = async () => {
-    // returns Array<{ joint, position, velocity, acceleration, target }>
-    const statuses = await getAllJointStatus();
-
-    if (!Array.isArray(statuses) || statuses.length !== 6) {
-      toast({ title: "Failed to get joint status", status: "error" });
-      return;
-    }
-
-    // extract positions from the fresh array
-    const initialPositions = statuses.map(j => j.position);
-    const finalPositions = poseJoints || [];
-
-    const jointsIdx = finalPositions.map((_, i) => i + 1);
-    const deltas = finalPositions.map((t, i) => Math.abs(t - initialPositions[i]));
-
-    const baseSpeeds = jointsIdx.map(j => (parameters[`joint${j}.maxSpeed`] ?? 0) / 3);
-    const baseAccels = jointsIdx.map(j => (parameters[`joint${j}.maxAccel`] ?? 0) / 3);
-
-    // trapezoidal sync logic (as before)…
-    const trapezoidalTime = (delta, vmax, amax) => {
-      const tA = vmax / amax;
-      const xA = 0.5 * amax * tA * tA;
-      if (delta < 2 * xA) return 2 * Math.sqrt(delta / amax);
-      const xC = delta - 2 * xA;
-      return 2 * tA + (xC / vmax);
-    };
-
-    const travelTimes = deltas.map((d, i) => trapezoidalTime(d, baseSpeeds[i], baseAccels[i]));
-    const syncTime = Math.max(...travelTimes, 0.01);
-
-    const syncProfiles = deltas.map((d, i) => {
-      const amax = baseAccels[i];
-      let vmax;
-
-      // decide triangular vs trapezoidal
-      const tAmax = syncTime / 2;
-      const xAmax = 0.5 * amax * tAmax * tAmax;
-      if (d < 2 * xAmax) {
-        vmax = Math.sqrt(d * amax);
-      } else {
-        const disc = amax * amax * syncTime * syncTime - 4 * amax * d;
-        vmax = disc < 0
-          ? amax * tAmax
-          : (amax * syncTime - Math.sqrt(disc)) / 2;
-      }
-
-      vmax = Math.min(vmax, baseSpeeds[i]);
-      const aSync = vmax / (syncTime / 2);
-
-      return { vmax, aSync };
+  // Move physical robot to whatever is currently in the viewer (store)
+  const handleMovePhysicalToVirtual = useCallback(() => {
+    movePhysicalToVirtual({
+      getAllJointStatus,
+      poseJoints: useJointStore.getState().angles, // read latest at click time
+      parameters,
+      moveMultiple,
+      toast,
     });
+  }, [getAllJointStatus, parameters, moveMultiple, toast]);
 
-    const round4 = v => Math.round(v * 10000) / 10000;
-
-    moveMultiple(
-      jointsIdx,
-      finalPositions.map(round4),
-      syncProfiles.map(p => round4(Math.max(0.1, p.vmax))),
-      syncProfiles.map(p => round4(Math.max(0.1, p.aSync)))
-    );
-  };
-
-  const handleAddExtra = e => setExtras(es => [...es, e]);
-
-  // choose display joints
-  const displayJoints = isSimulating && simJoints ? simJoints : poseJoints;
+  const handleAddExtra = (e) => setExtras((es) => [...es, e]);
 
   // UI theming…
   const bg = useColorModeValue("gray.100", "gray.900");
   const cardBg = useColorModeValue("white", "gray.800");
   const border = useColorModeValue("gray.300", "gray.500");
-  const JOINT_LIMITS = [
-    { min: -37, max: 143 }, { min: -10, max: 160 }, { min: -125, max: 125 },
-    { min: -144, max: 206 }, { min: -120, max: 120 }, { min: -172.5, max: 172.5 },
-  ];
 
   return (
     <Box display="flex" flexDir="column" h="full" w="full" bg={bg} p={2}>
-      <Grid flex="1" templateRows="1fr 1fr" templateColumns="1fr 1fr" gap={2} overflow="hidden">
-
+      <Grid
+        flex="1"
+        templateRows="1fr 1fr"
+        templateColumns="1fr 1fr"
+        gap={2}
+        overflow="hidden"
+      >
         {/* Pose Editor */}
-        <Box bg={cardBg} p={3} rounded="xl" border="1px solid" borderColor={border} shadow="sm">
-          <Heading size="lg" mb={2}>Pose Editor Simulation</Heading>
+        <Box
+          bg={cardBg}
+          p={3}
+          rounded="xl"
+          border="1px solid"
+          borderColor={border}
+          shadow="sm"
+        >
+          <Heading size="lg" mb={2}>
+            Pose Editor Simulation
+          </Heading>
           <SimpleGrid columns={2} spacing={2}>
-            {["X", "Y", "Z"].map((ax, i) => {
+            {["X", "Y", "Z"].map((ax) => {
               const state = { X: posX, Y: posY, Z: posZ };
               const setter = { X: setPosX, Y: setPosY, Z: setPosZ };
               return (
-                <Box bg="gray.700" p={3} rounded="xl" border="1px solid" borderColor={border} key={ax}>
-                  <FormControl key={ax}>
+                <Box
+                  bg="gray.700"
+                  p={3}
+                  rounded="xl"
+                  border="1px solid"
+                  borderColor={border}
+                  key={ax}
+                >
+                  <FormControl>
                     <FormLabel>{ax} (mm)</FormLabel>
                     <HStack spacing={1}>
-                      <Button size="sm" onClick={() => { setter[ax]((parseFloat(state[ax]) - 10).toFixed(3)); scheduleApplyPose(); }}>−10</Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setter[ax](
+                            (parseFloat(state[ax]) - 10).toFixed(3)
+                          );
+                          scheduleApplyPose();
+                        }}
+                      >
+                        −10
+                      </Button>
                       <InputGroup size="sm">
                         <NumberInput
                           value={state[ax]}
-                          onChange={v => { setter[ax](v); scheduleApplyPose(); }}
+                          onChange={(v) => {
+                            setter[ax](v);
+                            scheduleApplyPose();
+                          }}
                         >
                           <NumberInputField />
                           <NumberInputStepper>
@@ -374,18 +354,32 @@ export default function MoveAxisTab() {
                         </NumberInput>
                         <InputRightAddon w="50px">mm</InputRightAddon>
                       </InputGroup>
-                      <Button size="sm" onClick={() => { setter[ax]((parseFloat(state[ax]) + 10).toFixed(3)); scheduleApplyPose(); }}>+10</Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setter[ax](
+                            (parseFloat(state[ax]) + 10).toFixed(3)
+                          );
+                          scheduleApplyPose();
+                        }}
+                      >
+                        +10
+                      </Button>
                     </HStack>
-                    {/* Slider */}
                     <Slider
                       mt={2}
                       min={-1000}
                       max={1000}
                       step={1}
                       value={parseFloat(state[ax])}
-                      onChange={v => { setter[ax](v.toFixed(3)); scheduleApplyPose(); }}
+                      onChange={(v) => {
+                        setter[ax](v.toFixed(3));
+                        scheduleApplyPose();
+                      }}
                     >
-                      <SliderTrack><SliderFilledTrack /></SliderTrack>
+                      <SliderTrack>
+                        <SliderFilledTrack />
+                      </SliderTrack>
                       <SliderThumb />
                     </Slider>
                   </FormControl>
@@ -393,20 +387,40 @@ export default function MoveAxisTab() {
               );
             })}
 
-            {["A", "B", "C"].map((ax, i) => {
+            {["A", "B", "C"].map((ax) => {
               const state = { A: angA, B: angB, C: angC };
               const setter = { A: setAngA, B: setAngB, C: setAngC };
               return (
-                <Box bg="gray.700" p={3} rounded="xl" border="1px solid" borderColor={border} key={ax}>
-                  <FormControl key={ax}>
+                <Box
+                  bg="gray.700"
+                  p={3}
+                  rounded="xl"
+                  border="1px solid"
+                  borderColor={border}
+                  key={ax}
+                >
+                  <FormControl>
                     <FormLabel>{ax} (°)</FormLabel>
                     <HStack spacing={1}>
-                      <Button size="sm" onClick={() => { setter[ax]((parseFloat(state[ax]) - 2).toFixed(1)); scheduleApplyPose(); }}>−2°</Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setter[ax](
+                            (parseFloat(state[ax]) - 2).toFixed(1)
+                          );
+                          scheduleApplyPose();
+                        }}
+                      >
+                        −2°
+                      </Button>
                       <InputGroup size="sm">
                         <NumberInput
                           step={0.1}
                           value={state[ax]}
-                          onChange={v => { setter[ax](v); scheduleApplyPose(); }}
+                          onChange={(v) => {
+                            setter[ax](v);
+                            scheduleApplyPose();
+                          }}
                         >
                           <NumberInputField />
                           <NumberInputStepper>
@@ -416,18 +430,32 @@ export default function MoveAxisTab() {
                         </NumberInput>
                         <InputRightAddon w="50px">°</InputRightAddon>
                       </InputGroup>
-                      <Button size="sm" onClick={() => { setter[ax]((parseFloat(state[ax]) + 2).toFixed(1)); scheduleApplyPose(); }}>+2°</Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setter[ax](
+                            (parseFloat(state[ax]) + 2).toFixed(1)
+                          );
+                          scheduleApplyPose();
+                        }}
+                      >
+                        +2°
+                      </Button>
                     </HStack>
-                    {/* Slider */}
                     <Slider
                       mt={2}
                       min={-180}
                       max={180}
                       step={1}
                       value={parseFloat(state[ax])}
-                      onChange={v => { setter[ax](v.toFixed(1)); scheduleApplyPose(); }}
+                      onChange={(v) => {
+                        setter[ax](v.toFixed(1));
+                        scheduleApplyPose();
+                      }}
                     >
-                      <SliderTrack><SliderFilledTrack /></SliderTrack>
+                      <SliderTrack>
+                        <SliderFilledTrack />
+                      </SliderTrack>
                       <SliderThumb />
                     </Slider>
                   </FormControl>
@@ -438,26 +466,51 @@ export default function MoveAxisTab() {
         </Box>
 
         {/* 3D + STL */}
-        <Box bg="gray.700" p={3} rounded="xl" border="1px solid" borderColor={border} shadow="sm" h="100%" d="flex" flexDir="column">
-          <AddStlModal onAdd={handleAddExtra} />
+        <Box
+          bg="gray.700"
+          p={3}
+          rounded="xl"
+          border="1px solid"
+          borderColor={border}
+          shadow="sm"
+          h="100%"
+          d="flex"
+          flexDir="column"
+        >
+          <AddStlModal onAdd={setExtras} />
           <Box flex="1" mt={2}>
-            <RobotLoader joints={displayJoints} isLive extras={extras} />
+            <RobotLoader isLive extras={extras} />
           </Box>
         </Box>
 
         {/* Linear Move Simulation */}
-        <Box bg={cardBg} p={3} rounded="xl" border="1px solid" borderColor={border} shadow="sm">
-          <Heading size="lg" mb={2}>Linear Move Simulation</Heading>
+        <Box
+          bg={cardBg}
+          p={3}
+          rounded="xl"
+          border="1px solid"
+          borderColor={border}
+          shadow="sm"
+        >
+          <Heading size="lg" mb={2}>
+            Linear Move Simulation
+          </Heading>
 
-          {/* final position/orientation */}
           <SimpleGrid columns={2} spacing={2} mb={4}>
             {["X", "Y", "Z"].map((ax, i) => (
               <FormControl key={ax}>
                 <FormLabel fontSize="sm">{ax} (mm)</FormLabel>
                 <InputGroup size="sm">
-                  <NumberInput step={1} value={[lmX, lmY, lmZ][i]} onChange={[setLmX, setLmY, setLmZ][i]}>
+                  <NumberInput
+                    step={1}
+                    value={[lmX, lmY, lmZ][i]}
+                    onChange={[setLmX, setLmY, setLmZ][i]}
+                  >
                     <NumberInputField />
-                    <NumberInputStepper><NumberIncrementStepper /><NumberDecrementStepper /></NumberInputStepper>
+                    <NumberInputStepper>
+                      <NumberIncrementStepper />
+                      <NumberDecrementStepper />
+                    </NumberInputStepper>
                   </NumberInput>
                   <InputRightAddon w="50px">mm</InputRightAddon>
                 </InputGroup>
@@ -467,9 +520,16 @@ export default function MoveAxisTab() {
               <FormControl key={ax}>
                 <FormLabel fontSize="sm">{ax} (°)</FormLabel>
                 <InputGroup size="sm">
-                  <NumberInput step={0.1} value={[lmA, lmB, lmC][i]} onChange={[setLmA, setLmB, setLmC][i]}>
+                  <NumberInput
+                    step={0.1}
+                    value={[lmA, lmB, lmC][i]}
+                    onChange={[setLmA, setLmB, setLmC][i]}
+                  >
                     <NumberInputField />
-                    <NumberInputStepper><NumberIncrementStepper /><NumberDecrementStepper /></NumberInputStepper>
+                    <NumberInputStepper>
+                      <NumberIncrementStepper />
+                      <NumberDecrementStepper />
+                    </NumberInputStepper>
                   </NumberInput>
                   <InputRightAddon w="50px">°</InputRightAddon>
                 </InputGroup>
@@ -477,40 +537,67 @@ export default function MoveAxisTab() {
             ))}
           </SimpleGrid>
 
-          {/* speed/accel */}
-          <HStack spacing={2} mb={4}>
-            <FormControl flex="1">
+          {/* Speed / Accel */}
+          <SimpleGrid columns={2} spacing={2} mb={4}>
+            <FormControl>
               <FormLabel fontSize="sm">Speed</FormLabel>
               <InputGroup size="sm">
-                <NumberInput step={0.01} min={0} value={lmSpeed} onChange={setLmSpeed}>
+                <NumberInput
+                  min={0}
+                  step={0.01}
+                  precision={3}
+                  value={lmSpeed}
+                  onChange={(valueString) => setLmSpeed(valueString)}
+                  isDisabled={isStreaming || isProfiling}
+                >
                   <NumberInputField />
-                  <NumberInputStepper><NumberIncrementStepper /><NumberDecrementStepper /></NumberInputStepper>
+                  <NumberInputStepper>
+                    <NumberIncrementStepper />
+                    <NumberDecrementStepper />
+                  </NumberInputStepper>
                 </NumberInput>
-                <InputRightAddon w="50px">m/s</InputRightAddon>
+                <InputRightAddon w="56px">units</InputRightAddon>
               </InputGroup>
             </FormControl>
-            <FormControl flex="1">
-              <FormLabel fontSize="sm">Accel</FormLabel>
+
+            <FormControl>
+              <FormLabel fontSize="sm">Acceleration</FormLabel>
               <InputGroup size="sm">
-                <NumberInput step={0.01} min={0} value={lmAccel} onChange={setLmAccel}>
+                <NumberInput
+                  min={0}
+                  step={0.01}
+                  precision={3}
+                  value={lmAccel}
+                  onChange={(valueString) => setLmAccel(valueString)}
+                  isDisabled={isStreaming || isProfiling}
+                >
                   <NumberInputField />
-                  <NumberInputStepper><NumberIncrementStepper /><NumberDecrementStepper /></NumberInputStepper>
+                  <NumberInputStepper>
+                    <NumberIncrementStepper />
+                    <NumberDecrementStepper />
+                  </NumberInputStepper>
                 </NumberInput>
-                <InputRightAddon w="50px">m/s²</InputRightAddon>
+                <InputRightAddon w="56px">units</InputRightAddon>
               </InputGroup>
             </FormControl>
-          </HStack>
+          </SimpleGrid>
 
           <HStack spacing={4}>
             <Button
-              flex="1" variant="outline" colorScheme="primary"
-              onClick={doLinearMove} isLoading={isStreaming}
+              flex="1"
+              variant="outline"
+              colorScheme="primary"
+              onClick={doLinearMove}
+              isLoading={isStreaming}
             >
               Simulate Interpolation
             </Button>
             <Button
-              flex="1" variant="outline" colorScheme="primary"
-              onClick={doComputeProfile} isLoading={isProfiling}
+              flex="1"
+              variant="outline"
+              colorScheme="primary"
+              onClick={doComputeProfile}
+              isLoading={isProfiling}
             >
               Simulate Profile
             </Button>
@@ -518,39 +605,61 @@ export default function MoveAxisTab() {
         </Box>
 
         {/* Joint Status */}
-        <Box bg={cardBg} p={3} rounded="xl" border="1px solid" borderColor={border} shadow="sm">
-          <Heading size="lg" mb={2}>Joint Status</Heading>
+        <Box
+          bg={cardBg}
+          p={3}
+          rounded="xl"
+          border="1px solid"
+          borderColor={border}
+          shadow="sm"
+        >
+          <Heading size="lg" mb={2}>
+            Joint Status
+          </Heading>
           <SimpleGrid columns={[2, 3]} spacing={6}>
-            {(displayJoints || []).map((ang, i) => {
+            {(storeAngles || []).map((ang, i) => {
+              const JOINT_LIMITS = [
+                { min: -37, max: 143 },
+                { min: -10, max: 160 },
+                { min: -125, max: 125 },
+                { min: -144, max: 206 },
+                { min: -120, max: 120 },
+                { min: -172.5, max: 172.5 },
+              ];
               const { min, max } = JOINT_LIMITS[i];
               const clamped = Math.max(min, Math.min(max, ang));
-              const pct = (clamped - min) / (max - min) * 100;
+              const pct = ((clamped - min) / (max - min)) * 100;
               let scheme = "green";
               const near = Math.min(ang - min, max - ang);
               if (near <= 0) scheme = "red";
               else if (near <= 5) scheme = "orange";
               else if (near <= 10) scheme = "yellow";
               return (
-                <Box key={i} p={4} rounded="xl" border="1px solid" borderColor={`${scheme}.300`}>
+                <Box
+                  key={i}
+                  p={4}
+                  rounded="xl"
+                  border="1px solid"
+                  borderColor={`${scheme}.300`}
+                >
                   <Stat>
                     <StatLabel>Joint {i + 1}</StatLabel>
-                    <StatNumber color={`${scheme}.500`}>{ang.toFixed(1)}°</StatNumber>
+                    <StatNumber color={`${scheme}.500`}>
+                      {ang.toFixed(1)}°
+                    </StatNumber>
                   </Stat>
                   <Progress value={pct} colorScheme={scheme} size="sm" mt={2} />
-                  <Text fontSize="sm" color="gray.500">Range: {min}° – {max}°</Text>
+                  <Text fontSize="sm" color="gray.500">
+                    Range: {min}° – {max}°
+                  </Text>
                 </Box>
               );
             })}
           </SimpleGrid>
-          <Button
-            mt={4}
-            colorScheme="primary"
-            onClick={movePhysicalToVirtual}
-          >
+          <Button mt={4} colorScheme="primary" onClick={handleMovePhysicalToVirtual}>
             Move physical robot to virtual joint positions
           </Button>
         </Box>
-
       </Grid>
     </Box>
   );

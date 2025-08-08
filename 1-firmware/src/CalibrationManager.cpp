@@ -39,9 +39,10 @@ bool CalibrationManager::isHoming() const
 
 void CalibrationManager::abortHoming()
 {
-  // stop any pending jog or move
+  // stop any pending jog or move and reset state to idle
   JointManager::instance().stopJog(jobJoint);
   JointManager::instance().stopAll();
+  backoffCleared = false;
   phase = CAL_IDLE;
 }
 
@@ -153,11 +154,11 @@ void CalibrationManager::update()
       minPos[jobJoint] = cfgMin - cfgOffset;
       maxPos[jobJoint] = cfgMax - cfgOffset;
 
-      // final swing to exact homeOffset
       JM.move(jobJoint,
               cfgOffset,
               fastSpeed,
-              fastSpeed * 2.0f);
+              fastSpeed * 2.0f,
+              /*ignoreLimits=*/true);
       phase = CAL_FINAL_OFFSET;
     }
     break;

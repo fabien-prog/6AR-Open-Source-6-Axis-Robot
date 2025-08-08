@@ -1,158 +1,187 @@
-# Pi Bridge Overview
+# 2-Pi-Bridge Overview
 
-## What is the Pi Bridge?
+## 📌 Purpose
 
-The **2-Pi-Bridge** is the central logic hub that connects the high-level robot control stack:
+The **2-Pi-Bridge** is the **central coordination layer** between:
 
-* **Python Inverse Kinematics Service** for motion planning and trajectory generation.
-* **Serial Communication with Teensy** for executing joint movements, various commands and receiving status updates.
-* **WebSocket + HTTP Server** using **Express + Socket.IO** to serve the frontend and expose APIs.
-* **Acts as a Bridge between frontend ↔ Backend ↔ Microcontroller** in real-time.
+* **Frontend UI (React/Electron)** — user interface and program control.
+* **Python IK Service** — inverse/forward kinematics, motion profiling, and trajectory generation.
+* **Teensy 4.1 Firmware** — real-time joint control, IO handling, and safety enforcement.
 
----
-
-## Components
-
-### 1. `index.js` — Node.js Web Server & Serial Manager
-
-| Function                        | Description                                                                    |
-| ------------------------------- | -------------------------------------------------------------------------------|
-| `express()`                     | Hosts the React static build (`/public`)                                       |
-| `Socket.IO`                     | Bi-directional real-time WebSocket server (`io.on('connection')`)              |
-| `SerialPort` + `ReadlineParser` | Communicates with the Teensy via `/dev/ttyAMA0` (115200 baud)                  |
-| `spawn()`                       | Launches the Python IK engine (`ik_service.py`) with unbuffered I/O            |
-| `requestIk()`                   | Queues requests to the IK service (only one at a time via FIFO `pending[]`)    |
-| `writeTeensy()`                 | Sends JSON commands to the Teensy with ID tracking and timeout                 |
-| `enqueueBatch()`                | Streams batched `MoveMultiple` commands to Teensy at a fixed interval (to fix) |
+It handles **real-time, bidirectional** communication between these systems, guaranteeing that motion commands, kinematic calculations, and robot status updates are correctly routed and synchronized.
 
 ---
 
-### 2. `ik_service.py` — Python Motion Engine
+## 🧩 Main Responsibilities
 
-| Feature               | Description                                                                    |
-| --------------------- | ------------------------------------------------------------------------------ |
-| Robot Model           | Loads your URDF via Peter Corke's `ERobot` from `Robotics Toolbox for Python`  |
-| Forward Kinematics    | Computes TCP pose from given joint angles using `compute_fk()`                 |
-| Inverse Kinematics    | Solves joint angles from target TCP pose using `compute_ik()`                  |
-| Linear Move Profiling | Trapezoidal velocity profile with clamped speed/accel per joint                |
-| Streaming Moves       | Sends real-time `linearMove` steps to Teensy one by one                        |
-| Batched Moves         | Sends entire trajectory to Node.js for batching                                |
-| Profile Only Mode     | Returns a preview of the planned trajectory without executing                  |
-| Command Parsing       | Reads newline-delimited JSON commands from stdin and returns structured output |
+1. **Serve the Frontend** — via Express, serving static React build and WebSocket API.
+2. **Handle WebSocket Events** — using Socket.IO for low-latency, bidirectional data exchange with the frontend.
+3. **Launch & Manage Python IK Engine** — handling all FK/IK and trajectory planning requests in a controlled queue.
+4. **Bridge to Teensy Firmware** — sending/receiving JSON commands and events over a dedicated serial connection.
+5. **Command Tracking & Safety** — matching command IDs with ACKs, handling timeouts, and ensuring safe stops.
 
 ---
 
-## Data Flow
+## ⚙️ Components
 
-```bash
-    [ React UI ]
-        ▲   ▲
-        │   │ Socket.IO (ik_request, linearMove, etc.)
-        ▼   ▼
-  [ Node.js Server ]  ◀──── Python stdout/stderr ────▶  [ IK Service (ik_service.py) ]
-        │   ▲
-        │   │ Serial (Teensy JSON command/response)
-        ▼   ▼
-    [ Teensy 4.1 ]
+### **1. `index.js` — Node.js Server & Serial Manager**
+
+| Function / Component            | Description                                                                      |
+| ------------------------------- | -------------------------------------------------------------------------------- |
+| **Express Server**              | Serves compiled frontend (`/public`).                                            |
+| **Socket.IO Server**            | Maintains WebSocket connections (`io.on('connection')`).                         |
+| **SerialPort + ReadlineParser** | Handles Teensy communication via `/dev/ttyAMA0` at **115200 baud** (8N1).        |
+| **Python Process Spawn**        | Launches `ik_service.py` in unbuffered mode, capturing `stdout` and `stderr`.    |
+| **`writeTeensy()`**             | Sends JSON commands to Teensy, includes `id` for ACK tracking, manages timeouts. |
+| **`requestIk()`**               | Places IK/FK requests into FIFO queue to Python (only one in flight).            |
+| **`enqueueBatch()`**            | Streams `MoveMultiple` packets to Teensy at fixed interval from `batchQueue`.    |
+| **Error Handling**              | Detects Teensy timeouts, Python errors, malformed JSON, and triggers safe stops. |
+
+---
+
+### **2. `ik_service.py` — Python Motion Engine**
+
+| Feature / Function       | Description                                                                      |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| **Robot Model**          | Loads URDF via Peter Corke’s `ERobot` class.                                     |
+| **FK Solver**            | Calculates TCP pose from joint angles (`compute_fk()`).                          |
+| **IK Solver**            | Finds joint angles for given TCP pose (`compute_ik()`), supports seeded search.  |
+| **Trajectory Profiling** | Generates trapezoidal velocity profiles with joint-wise clamping of speed/accel. |
+| **Streaming Mode**       | Sends trajectory steps to Teensy one by one at fixed `CONTROL_DT`.               |
+| **Batched Mode**         | Generates full trajectory and sends it to Node for timed serial dispatch.        |
+| **Profile-Only Mode**    | Returns trajectory preview without moving the robot.                             |
+| **Command Handling**     | Reads newline-delimited JSON from stdin, outputs structured JSON to stdout.      |
+
+---
+
+## 🔄 Data Flow
+
+```text
+[ React Frontend ]
+      ▲   ▲
+      │   │  Socket.IO: ik_request, linearMove, profileLinear, etc.
+      ▼   ▼
+[ Node.js Server ]  ◀── stdout/stderr ──▶  [ Python IK Service ]
+      │   ▲
+      │   │  Serial JSON @ 115200 baud
+      ▼   ▼
+[ Teensy 4.1 Firmware ]
 ```
 
 ---
 
-## Socket.IO Events (Frontend ↔ Node)
+## 📡 Socket.IO Event Map
 
-| Event                                                | Direction                | Description                  |
-| ---------------------------------------------------- | ------------------------ | ---------------------------- |
-| `ik_request`                                         | → Node                   | FK/IK query                  |
-| `fk_request`                                         | → Node                   | TCP from joint angles        |
-| `linearMove`                                         | → Node → Python          | Streamed trajectory          |
-| `linearMoveToTeensy`                                 | → Node → Python → Teensy | Batched movement             |
-| `profileLinear`                                      | → Node → Python          | Dry-run trajectory preview   |
-| `cmd`                                                | → Teensy                 | Raw passthrough JSON command |
-| `jointStatus`, `parameters`                          | ← Node ← Teensy          | Real-time status feedback    |
-| `linearMove_error`, `linearMoveComplete`             | ← from Python            | Streaming move events        |
-| `profileLinear_response`                             | ← Node ← Python          | Profile data                 |
-| `ik_response`, `fk_response`, `ik_error`, `fk_error` | ← Responses to IK/FK     |                              |
+| Event Name                    | Direction                | Description                                     |
+| ----------------------------- | ------------------------ | ----------------------------------------------- |
+| `ik_request`                  | → Node → Python          | IK from TCP pose to joint angles.               |
+| `fk_request`                  | → Node → Python          | FK from joint angles to TCP pose.               |
+| `linearMove`                  | → Node → Python          | Real-time streaming of linear Cartesian motion. |
+| `linearMoveToTeensy`          | → Node → Python → Teensy | Batched Cartesian motion execution.             |
+| `profileLinear`               | → Node → Python          | Returns trajectory preview data.                |
+| `cmd`                         | → Node → Teensy          | Sends raw JSON command to firmware.             |
+| `jointStatus` / `parameters`  | ← Node ← Teensy          | Continuous status and configuration feedback.   |
+| `ik_response` / `fk_response` | ← Node ← Python          | FK/IK results back to frontend.                 |
+| `linearMove_error`            | ← Node ← Python          | Motion aborted due to error.                    |
+| `linearMoveComplete`          | ← Node ← Python          | Streaming motion finished.                      |
+| `profileLinear_response`      | ← Node ← Python          | Trajectory preview data returned.               |
 
 ---
 
-## JSON Protocols
+## 📝 JSON Protocols
 
-### Teensy Commands
+### **Teensy Command Examples**
 
 ```json
-{ "cmd": "MoveMultiple", "joints": [1,2,3], "targets": [...], "speeds": [...], "accels": [...] }
-{ "cmd": "Home", "joint": 2, "speedFast": 50, "speedSlow": 3 }
-{ "cmd": "StopAll" }
-{ "cmd": "ListParameters" }
+{ "cmd": "MoveMultiple", "joints": [1,2,3], "targets": [..], "speeds": [..], "accels": [..], "id": 42 }
+{ "cmd": "Home", "joint": 2, "speedFast": 50, "speedSlow": 3, "id": 43 }
+{ "cmd": "StopAll", "id": 44 }
+{ "cmd": "ListParameters", "id": 45 }
 ```
 
-### Python IK Requests
+**Rules:**
+
+* All motion/IO commands **must** have an `"id"` for ACK tracking.
+* Responses from Teensy echo the same `"id"`.
+
+---
+
+### **Python IK Requests**
 
 ```json
-{ "position": [x,y,z], "quaternion": [x,y,z,w], "seed": [deg...], "speed": 0.02 }
-{ "angles": [deg...] } → FK
-{ "profileLinear": { ... } }
-{ "linearMove": { ... } }
-{ "linearMoveToTeensy": { ... } }
+{ "position": [x, y, z], "quaternion": [qx, qy, qz, qw], "seed": [deg...], "speed": 0.02 }
+{ "angles": [deg...] }  // FK
+{ "profileLinear": { "from": [...], "to": [...], "speed": 0.02 } }
+{ "linearMove": { "from": [...], "to": [...], "speed": 0.02 } }
+{ "linearMoveToTeensy": { "from": [...], "to": [...], "speed": 0.02 } }
 ```
 
 ---
 
-## Configuration and Parameters
+## ⚙️ Configuration & Parameters
 
-* Python reads the robot URDF from:
+* **URDF Path:**
   `6AR-000-000.SLDASM/urdf/6AR-000-000.SLDASM.urdf`
-* Tool TCP offset: `Z +195 mm` relative to flange.
-* Python default values:
+* **TCP Offset:**
+  +Z 195 mm from flange.
+* **Python Defaults:**
 
-  * `CONTROL_DT`: 0.02s
+  * `CONTROL_DT`: 0.02 s
   * `V_TCP`: 0.02 m/s
-  * `ANG_SPEED`: 45°/s
-* Teensy serial is `/dev/ttyAMA0 @ 115200`
-* Python interpreter is resolved from `venv/bin/python` in local folder.
+  * `ANG_SPEED`: 45 °/s
+* **Serial Settings:**
+
+  * Port: `/dev/ttyAMA0`
+  * Baud: `115200`
+  * Format: 8N1, newline-terminated JSON
+* **Python Interpreter:**
+  Resolved from local `venv/bin/python`.
 
 ---
 
-## State Management
+## 📦 State Management
 
-* `last_q`: Global variable in Python tracking the last solved joint angles.
-* `latestTeensyJoints`: Stores last-reported positions from Teensy.
-* `awaiting`: Tracks all pending writeTeensy commands by ID (cleared on ACK or timeout).
-* `pending`: FIFO queue for IK service requests (only one active at a time).
-* `batchQueue`: Stores queued `MoveMultiple` commands for scheduled dispatch to Teensy.
-
----
-
-## Error Handling
-
-| Failure                       | Behavior                                          |
-| ----------------------------- | ------------------------------------------------- |
-| Teensy ACK Timeout            | `StopAll` is sent, `teensy_timeout` event emitted |
-| IK solve fails mid-trajectory | Error is emitted, motion aborts                   |
-| IK fails pre-check            | `ik_error` sent back to UI                        |
-| Malformed JSON from Teensy    | Logs to console, ignored                          |
-| Python returns error          | Emitted as `linearMove_error` or `ik_error`       |
+* **`last_q` (Python)** — last solved joint angles.
+* **`latestTeensyJoints` (Node)** — last received joint states from firmware.
+* **`awaiting` (Node)** — map of command IDs awaiting Teensy ACK.
+* **`pending` (Node)** — FIFO queue for Python IK/FK requests.
+* **`batchQueue` (Node)** — upcoming `MoveMultiple` packets for timed streaming.
 
 ---
 
-## Debugging Tips
+## 🚨 Error Handling
 
-* Use `console.log()` in `index.js` to trace the flow of messages.
-* All IK stderr logs go to `[IKService:stderr]`, including tracebacks.
-* Teensy stdout is printed line-by-line from the serial port.
-* Teensy invalid JSON will show as `[Teensy] Invalid JSON`.
+| Failure Case               | Bridge Response                                |
+| -------------------------- | ---------------------------------------------- |
+| **Teensy ACK Timeout**     | Sends `StopAll`, emits `teensy_timeout`.       |
+| **IK Solve Fails Mid-Run** | Aborts, emits `linearMove_error`.              |
+| **IK Pre-Check Failure**   | Emits `ik_error`.                              |
+| **Malformed Teensy JSON**  | Logs `[Teensy] Invalid JSON`, ignores packet.  |
+| **Python Runtime Error**   | Logged to `[IKService:stderr]`, emitted to UI. |
 
 ---
 
-## Summary of Capabilities
+## 🔍 Debugging Tips
 
-| Category            | Description                                            |
-| ------------------- | ------------------------------------------------------ |
-|  Motion Planning    | Trapezoidal profiling, batch or streaming mode         |
-|  Pose Solving       | IK & FK, with seeded and batched support               |
-|  Command Queueing   | Smooth real-time dispatch of multi-axis commands       |
-|  Full Roundtrip     | Real-time data and motion feedback from robot          |
-|  WebSocket API      | Integrates with React frontend via Socket.IO           |
-|  Safety             | Timeout handling, IK failure detection, emergency stop |
+* **Node Logs**:
+
+  * `[Teensy:stdout]` — firmware responses.
+  * `[IKService:stdout]` — Python computed results.
+  * `[IKService:stderr]` — Python errors/traces.
+* Teensy invalid JSON will produce an `[Invalid JSON]` log.
+* Use `console.log()` in `server.js` to trace request/response flow.
+
+---
+
+## ✅ Summary of Capabilities
+
+| Category             | Description                                                       |
+| -------------------- | ----------------------------------------------------------------- |
+| **Motion Planning**  | Trapezoidal profiling, streaming or batched trajectory execution. |
+| **Pose Solving**     | Full FK/IK with seed and batch support.                           |
+| **Command Queueing** | ID-tracked commands with timeout handling.                        |
+| **Safety**           | Auto-stop on timeout, error, or E-stop.                           |
+| **Roundtrip Data**   | Live status from Teensy back to frontend.                         |
+| **WebSocket API**    | Real-time robot control via Socket.IO.                            |
 
 ---

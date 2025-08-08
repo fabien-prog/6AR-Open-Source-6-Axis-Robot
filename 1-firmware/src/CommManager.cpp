@@ -5,22 +5,18 @@
 #include "IOManager.h"
 #include <ArduinoJson.h>
 
-// static JSON scratch
 StaticJsonDocument<2048> CommManager::_json;
 
-// FNV-1a helper (for dispatchCommand)
 static constexpr uint32_t FNV_OFFSET = 2166136261u;
 static constexpr uint32_t FNV_PRIME = 16777619u;
 
-// how many mini-steps per slice
 static constexpr uint8_t SUBDIVISIONS = 50;
 
-// batch-execution state
-static size_t _segIndex = 0;
-static uint8_t _substep = 0;
-static float _dtSec = 0.0f;
-static float _prevSpeeds[CONFIG_JOINT_COUNT];
-static float _accelPerSub[CONFIG_JOINT_COUNT];
+size_t _segIndex = 0;
+uint8_t _substep = 0;
+float _dtSec = 0.0f;
+float _prevSpeeds[CONFIG_JOINT_COUNT];
+float _accelPerSub[CONFIG_JOINT_COUNT];
 
 static constexpr uint32_t fnv1a(const char *s)
 {
@@ -38,7 +34,7 @@ CommManager &CommManager::instance()
   static CommManager inst;
   return inst;
 }
-// ——— begin() —————————————————————————————————————————————————
+
 void CommManager::begin(HardwareSerial &port)
 {
   _serial = &port;
@@ -68,6 +64,11 @@ void CommManager::poll()
     {
       _rxBuf[_rxIdx++] = c;
     }
+    else
+    {
+      _rxIdx = 0;
+      sendCallback("sync", true, nullptr);
+    }
   }
 }
 
@@ -93,7 +94,6 @@ bool CommManager::dequeueRaw(char *out)
 
 void CommManager::processBufferedLines()
 {
-  // don't parse while we're in the middle of EXECUTING a batch
   if (_state == State::EXECUTING)
     return;
   char line[CMD_BUF_SIZE];
@@ -112,6 +112,10 @@ void CommManager::dispatchLine(const char *line)
   if (err)
   {
     sendCallback("error", false, "parseFailed");
+    sendCallback("sync", true, nullptr);
+    _rqHead = _rqTail;
+    _rqCount = 0;
+    _state = State::IDLE;
     return;
   }
   JsonObject doc = _json.as<JsonObject>();
@@ -121,35 +125,22 @@ void CommManager::dispatchLine(const char *line)
   if (_state == State::IDLE)
   {
     if (strcmp(cmd, "BeginBatch") == 0)
-    {
       handleBeginBatch(doc);
-    }
     else
-    {
       dispatchCommand(doc);
-    }
   }
   else if (_state == State::LOADING)
   {
     if (strcmp(cmd, "M") == 0)
-    {
       handleBatchSegmentBatch(doc);
-    }
     else if (strcmp(cmd, "AbortBatch") == 0)
-    {
       handleAbortBatch(doc);
-    }
     else
-    {
       sendCallback("error", false, "notLoadingBatch");
-    }
   }
-  // if EXECUTING, we skip parsing entirely until the batch finishes
-
   _pendingCmdId = -1;
 }
 
-// ——— low-level sends —————————————————————————————————————
 void CommManager::handleBeginBatch(JsonObject &doc)
 {
   _expected = doc["count"].as<size_t>();
@@ -170,6 +161,10 @@ void CommManager::handleBeginBatch(JsonObject &doc)
     _prevSpeeds[j] = 0.0f;
     _accelPerSub[j] = 0.0f;
   }
+
+  // put all joints into jog mode at 0 speed (so slices update cleanly)
+  JointManager::instance().setAllJogZero(500.0f);
+
   _state = State::LOADING;
   sendCallback("BeginBatch", true);
 }
@@ -205,11 +200,11 @@ void CommManager::handleBatchSegmentBatch(JsonObject &doc)
   }
 }
 
-// ——— handleAbortBatch() —————————————————————————————————————
 void CommManager::handleAbortBatch(JsonObject &)
 {
   _state = State::IDLE;
-  _loaded = _expected = _index = 0;
+  _loaded = _expected = 0;
+  JointManager::instance().setAllJogZero(60.0f);
   sendCallback("BatchAborted", true);
 }
 
@@ -224,48 +219,41 @@ void CommManager::handleBatchExecution()
     return;
   _lastExecUs = now;
 
-  // all done?
   if (_segIndex >= _loaded)
   {
+    // final safety: ensure we bleed to zero (Python should also end with zero speeds)
+    JointManager::instance().setAllJogZero(60.0f);
     _state = State::IDLE;
     sendCallback("BatchComplete", true);
-    JointManager::instance().stopAll();
     return;
   }
 
-  // first sub-step of a slice: compute accel per mini-step
   if (_substep == 0)
   {
     auto &seg = _batch[_segIndex];
     for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
     {
-      // full‐slice Δ-speed [deg/s] over dt: seg.accels[j]
       _accelPerSub[j] = seg.accels[j] * _dtSec / float(SUBDIVISIONS);
     }
   }
 
-  // build arrays of speeds & accels for this mini-step
   float speeds[CONFIG_JOINT_COUNT];
   float accels[CONFIG_JOINT_COUNT];
   for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
   {
-    // ramp from previous slice‐end speed up by sub-increments
     float newSpd = _prevSpeeds[j] + _accelPerSub[j] * float(_substep + 1);
-    speeds[j] = newSpd;
-    accels[j] = _accelPerSub[j];
+    speeds[j] = newSpd;                                                  // signed deg/s
+    accels[j] = fabsf(_accelPerSub[j]) / (_dtSec / float(SUBDIVISIONS)); // deg/s² equivalent inside sub-step
+    // Note: we only need a magnitude for accel; direction is in speed sign
   }
 
-  float dt = _dtSec / float(SUBDIVISIONS);
-  // hand off the whole–robot slice in one call
+  // Apply the mini-step to steppers (velocity mode)
+  JointManager::instance().feedVelocitySlice(speeds, accels);
 
-  // advance mini-step
   if (++_substep >= SUBDIVISIONS)
   {
-    // snap to final slice speed
     for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
-    {
       _prevSpeeds[j] = _batch[_segIndex].speeds[j];
-    }
     _substep = 0;
     _segIndex++;
   }
@@ -533,45 +521,51 @@ void CommManager::handleMoveMultiple(JsonObject &doc)
   auto spds = doc["speeds"].as<JsonArray>();
   auto acs = doc["accels"].as<JsonArray>();
 
-  if (js.size() != tgts.size() ||
-      js.size() != spds.size() ||
-      js.size() != acs.size())
+  size_t N = js.size();
+  if (N == 0 || tgts.size() != N || spds.size() != N || acs.size() != N)
   {
     sendCallback("moveMultiple", false, "length mismatch");
     return;
   }
 
-  bool allOk = true;
-  for (size_t i = 0; i < js.size(); ++i)
+  // Build temporary arrays on the stack
+  size_t joints[N];
+  float targets[N];
+  float speeds[N];
+  float accels[N];
+
+  // Parse & validate
+  for (size_t i = 0; i < N; ++i)
   {
-    int j = js[i].as<int>() - 1;
-    if (j < 0 || j >= CONFIG_JOINT_COUNT)
+    int ji = js[i].as<int>() - 1;
+    if (ji < 0 || ji >= CONFIG_JOINT_COUNT)
     {
-      allOk = false;
-      continue;
+      sendCallback("moveMultiple", false, "invalid joint");
+      return;
     }
-
-    float tgt = tgts[i].as<float>();
-    float spd = spds[i].as<float>();
-    float acc = acs[i].as<float>();
-
-    // schedule a relative move on each axis
-    bool ok = JointManager::instance().move(j, tgt, spd, acc);
-    allOk &= ok;
+    joints[i] = size_t(ji);
+    targets[i] = tgts[i].as<float>();
+    speeds[i] = spds[i].as<float>();
+    accels[i] = acs[i].as<float>();
   }
 
+  // Fire off all moves in one shot
+  bool ok = JointManager::instance()
+                .moveMultiple(joints,
+                              targets,
+                              speeds,
+                              accels,
+                              N /* count */,
+                              false /* ignoreLimits? */);
+
   sendCallback("moveMultiple",
-               allOk,
-               allOk ? nullptr : "invalid/moving/estop");
+               ok,
+               ok ? nullptr : "invalid/moving/estop");
 }
+
 void CommManager::handleJog(JsonObject &doc)
 {
   int j = doc["joint"].as<int>() - 1;
-  if (j < 0 || j >= CONFIG_JOINT_COUNT)
-  {
-    sendCallback("jog", false, "invalid joint");
-    return;
-  }
   float targetV = doc["target"].as<float>();
   float accel = doc["accel"].as<float>();
   bool ok = JointManager::instance().jog(j, targetV, accel);
@@ -716,17 +710,32 @@ void CommManager::handleSetHomeOffset(JsonObject &doc)
 
 void CommManager::handleListParameters(JsonObject &)
 {
-  const JsonDocument &cfg = ConfigManager::instance().getFullConfig();
-  JsonObjectConst full = cfg.as<JsonObjectConst>();
-
   StaticJsonDocument<2048> doc;
+
   doc["cmd"] = "parameters";
   auto data = doc.createNestedObject("data");
   auto p = data.createNestedObject("params");
-  for (JsonPairConst kv : full)
+  for (JsonPairConst kv : ConfigManager::instance().getFullConfig().as<JsonObjectConst>())
+  {
     p[kv.key()] = kv.value();
+  }
 
-  attachId(doc); //  ← add this
+  // immediately check if we blew past capacity
+  if (doc.overflowed())
+  {
+    // reply with an error instead of sending a truncated JSON
+    StaticJsonDocument<128> err;
+    err["cmd"] = "parameters";
+    err["status"] = "error";
+    err["error"] = "EEPROM overflow";
+    attachId(err);
+    String outErr;
+    serializeJson(err, outErr);
+    _serial->println(outErr);
+    return;
+  }
+
+  attachId(doc);
   String out;
   serializeJson(doc, out);
   _serial->println(out);

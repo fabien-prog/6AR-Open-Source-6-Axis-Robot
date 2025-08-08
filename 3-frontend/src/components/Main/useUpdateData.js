@@ -287,6 +287,7 @@ export function useIkRequest() {
         socket.emit("ik_request", { position, quaternion });
     };
 }
+
 export function useProfileLinear() {
     const { socket } = useSocket();
     // now takes a single {position, quaternion, speed, accel} object:

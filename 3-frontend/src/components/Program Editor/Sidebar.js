@@ -18,6 +18,7 @@ import { FiChevronLeft, FiChevronRight } from "react-icons/fi";
 // 1) Define categories for blocks.
 const categories = [
   { title: "Standard", blocks: ["Move L", "Move J", "Home"] },
+  { title: "I/O", blocks: ["SetDO", "WaitDI"] },
   { title: "Conditionals", blocks: ["If", "Else", "End If", "Then"] },
   { title: "Loops", blocks: ["For Loop", "End For"] },
   { title: "Miscellaneous", blocks: ["Counter", "Console Log", "Math"] },
@@ -111,6 +112,18 @@ const blockDescriptions = {
     "- Target Var: Variable to receive the result",
     "- Expression: Use +, -, *, /, (), variables, and numbers",
   ],
+  SetDO: [
+    "SetDO(pin, state)",
+    "Sets a digital output pin to 0 or 1.",
+    "pin: DO_n",
+    "state: 0 or 1"
+  ],
+  WaitDI: [
+    "WaitDI(pin, state)",
+    "Pauses execution until a digital input matches the state.",
+    "pin: DI_n",
+    "state: 0 or 1"
+  ],
 };
 
 const Sidebar = ({ expanded, setExpanded }) => {
@@ -173,7 +186,7 @@ const Sidebar = ({ expanded, setExpanded }) => {
                 <AccordionPanel p={2}>
                   <Droppable
                     droppableId={`sidebar-${catIndex}`}
-                    isDropDisabled
+                    isDropDisabled={true}
                     isCombineEnabled={false}
                     ignoreContainerClipping={false}
                   >
@@ -234,7 +247,7 @@ const Sidebar = ({ expanded, setExpanded }) => {
         ) : (
           <Droppable
             droppableId="sidebar-collapsed"
-            isDropDisabled
+            isDropDisabled={true}
             isCombineEnabled={false}
             ignoreContainerClipping={false}
           >

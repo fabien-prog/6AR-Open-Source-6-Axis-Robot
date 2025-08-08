@@ -1,12 +1,9 @@
-// StepperManager.cpp
-
 #include "StepperManager.h"
-#include <imxrt.h> // for PIT0_IRQn & NVIC_SET_PRIORITY
+#include <imxrt.h>
 #include <cmath>
 
 StepperManager *StepperManager::_inst = nullptr;
 
-// ─── singleton ─────────────────────────────────────────────
 StepperManager &StepperManager::instance()
 {
     static StepperManager mgr;
@@ -16,7 +13,6 @@ StepperManager &StepperManager::instance()
 StepperManager::StepperManager()
 {
     _inst = this;
-    // map pins & reversal
     for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
     {
         _stepPins[j] = JOINT_CONFIG[j].pulsePin;
@@ -26,30 +22,23 @@ StepperManager::StepperManager()
     }
 }
 
-// ─── begin / end ──────────────────────────────────────────
 void StepperManager::begin(uint32_t freqHz)
 {
     _dtSec = 1.0f / float(freqHz);
     uint32_t periodUs = uint32_t(1e6f / float(freqHz));
-
-    // pin setup
     for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
     {
         pinMode(_stepPins[j], OUTPUT);
         pinMode(_dirPins[j], OUTPUT);
         digitalWrite(_stepPins[j], LOW);
         digitalWrite(_dirPins[j], LOW);
-    }
-
-    // clear any existing plan
-    _motion.active = false;
-    for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
-    {
+        _motions[j].active = false;
         _jogActive[j] = false;
-        _positions[j] = 0;
+        _jogDir[j] = 0;
+        _jogTargetV[j] = 0;
+        _jogAccel[j] = 0;
+        _jogCurrentV[j] = 0;
     }
-
-    // start ISR
     _timer.begin(isrTrampoline, periodUs);
 }
 
@@ -58,58 +47,52 @@ void StepperManager::end()
     _timer.end();
 }
 
-// ─── trapezoidal motion ───────────────────────────────────
 bool StepperManager::startMotion(size_t joint,
                                  long deltaSteps,
                                  float vStepsPerSec,
                                  float aStepsPerSec2)
 {
-    if (joint >= CONFIG_JOINT_COUNT)
-        return false;
+    if (joint >= CONFIG_JOINT_COUNT || deltaSteps == 0)
+        return (deltaSteps == 0);
 
-    if (deltaSteps == 0)
-        return true;
+    // cancel jog on this joint
+    _jogActive[joint] = false;
 
-    // plan
-    _motion.joint = joint;
-    _motion.dir = (deltaSteps > 0 ? +1 : -1);
-    _motion.totalSteps = std::llabs(deltaSteps);
-    _motion.doneSteps = 0;
-    _motion.vMax = vStepsPerSec;
-    _motion.aMax = aStepsPerSec2;
+    auto &mp = _motions[joint];
+    mp.joint = joint;
+    mp.dir = (deltaSteps > 0 ? +1 : -1);
+    mp.startPos = _positions[joint];
+    mp.totalSteps = std::llabs(deltaSteps);
+    mp.doneSteps = 0;
+    mp.vMax = fabsf(vStepsPerSec);
+    mp.aMax = fabsf(aStepsPerSec2);
 
-    // compute times
-    float tA_full = vStepsPerSec / aStepsPerSec2;
-    float dA_full = 0.5f * aStepsPerSec2 * tA_full * tA_full;
-
-    if (_motion.totalSteps < 2 * dA_full)
+    float tA_full = mp.vMax / mp.aMax;
+    float dA_full = 0.5f * mp.aMax * tA_full * tA_full;
+    if (mp.totalSteps < 2 * dA_full)
     {
-        // triangular
-        float vPeak = sqrtf(_motion.totalSteps * aStepsPerSec2);
-        _motion.vMax = vPeak;
-        _motion.tAccel = vPeak / aStepsPerSec2;
-        _motion.tCruise = 0.0f;
+        float vPeak = sqrtf(mp.totalSteps * mp.aMax);
+        mp.vMax = vPeak;
+        mp.tAccel = vPeak / mp.aMax;
+        mp.tCruise = 0;
     }
     else
     {
-        // trapezoid
-        _motion.tAccel = tA_full;
-        _motion.tCruise = (_motion.totalSteps - 2 * dA_full) / vStepsPerSec;
+        mp.tAccel = tA_full;
+        mp.tCruise = (mp.totalSteps - 2 * dA_full) / mp.vMax;
     }
-    _motion.tTotal = 2 * _motion.tAccel + _motion.tCruise;
-    _motion.elapsed = 0.0f;
-    _motion.remainder = 0.0f;
-    _motion.active = true;
+    mp.tTotal = 2 * mp.tAccel + mp.tCruise;
+    mp.elapsed = 0;
+    mp.stepAcc = 0;
+    mp.currentV = 0;
+    mp.active = true;
 
-    // set direction pin once
-    bool raw = (_motion.dir > 0);
+    bool raw = (mp.dir > 0);
     bool fin = raw ^ _isReversed[joint];
     digitalWriteFast(_dirPins[joint], fin ? HIGH : LOW);
-
     return true;
 }
 
-// ─── jog ───────────────────────────────────────────────────
 bool StepperManager::startJog(size_t joint,
                               int dir,
                               float vStepsPerSec,
@@ -118,71 +101,145 @@ bool StepperManager::startJog(size_t joint,
     if (joint >= CONFIG_JOINT_COUNT)
         return false;
 
+    // cancel position move on this joint
+    _motions[joint].active = false;
+
     _jogActive[joint] = true;
     _jogDir[joint] = (dir >= 0 ? +1 : -1);
-    _jogTargetV[joint] = vStepsPerSec;
-    _jogAccel[joint] = aStepsPerSec2;
-    _jogCurrentV[joint] = 0.0f;
-    _jogRem[joint] = 0.0f;
+    _jogTargetV[joint] = fabsf(vStepsPerSec);
+    _jogAccel[joint] = fabsf(aStepsPerSec2);
+    _jogCurrentV[joint] = 0;
+    _jogRem[joint] = 0;
 
-    // set direction pin once
     bool raw = (_jogDir[joint] > 0);
     bool fin = raw ^ _isReversed[joint];
     digitalWriteFast(_dirPins[joint], fin ? HIGH : LOW);
-
     return true;
+}
+
+void StepperManager::setJogTarget(size_t joint,
+                                  float vStepsPerSec,
+                                  float aStepsPerSec2)
+{
+    if (joint >= CONFIG_JOINT_COUNT)
+        return;
+
+    // enter jog mode if not already
+    if (!_jogActive[joint])
+    {
+        startJog(joint, (vStepsPerSec >= 0 ? +1 : -1),
+                 fabsf(vStepsPerSec), fabsf(aStepsPerSec2));
+        return;
+    }
+
+    // update direction pin only if sign changed
+    int newDir = (vStepsPerSec >= 0 ? +1 : -1);
+    if (newDir != _jogDir[joint])
+    {
+        _jogDir[joint] = newDir;
+        bool raw = (_jogDir[joint] > 0);
+        bool fin = raw ^ _isReversed[joint];
+        digitalWriteFast(_dirPins[joint], fin ? HIGH : LOW);
+    }
+    _jogTargetV[joint] = fabsf(vStepsPerSec);
+    _jogAccel[joint] = fabsf(aStepsPerSec2);
+}
+
+void StepperManager::setJogTargetsAll(const float vStepsPerSec[CONFIG_JOINT_COUNT],
+                                      const float aStepsPerSec2[CONFIG_JOINT_COUNT])
+{
+    for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
+        setJogTarget(j, vStepsPerSec[j], aStepsPerSec2[j]);
+}
+
+void StepperManager::setAllJogTargetsZero(float aStepsPerSec2)
+{
+    for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
+    {
+        setJogTarget(j, 0.0f, aStepsPerSec2);
+    }
 }
 
 void StepperManager::stopJog(size_t joint)
 {
     if (joint < CONFIG_JOINT_COUNT)
-    {
         _jogActive[joint] = false;
-        _jogCurrentV[joint] = 0.0f;
-        _jogRem[joint] = 0.0f;
-    }
 }
 
 void StepperManager::emergencyStop()
 {
-    _motion.active = false;
     for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
+    {
         _jogActive[j] = false;
+        _motions[j].active = false;
+    }
 }
 
-// ─── idle check ────────────────────────────────────────────
 bool StepperManager::isIdle() const
 {
-    if (_motion.active)
-        return false;
     for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
-        if (_jogActive[j])
+        if (_jogActive[j] || _motions[j].active)
             return false;
     return true;
 }
 
-// ─── position access ───────────────────────────────────────
-void StepperManager::resetPosition(size_t j, long position)
+void StepperManager::resetPosition(size_t j, long pos)
 {
     if (j < CONFIG_JOINT_COUNT)
     {
         noInterrupts();
-        _positions[j] = position;
+        _positions[j] = pos;
         interrupts();
     }
 }
 
 long StepperManager::getPosition(size_t j) const
 {
-    if (j >= CONFIG_JOINT_COUNT)
-        return 0;
-    noInterrupts();
-    long p = _positions[j];
-    interrupts();
+    long p = 0;
+    if (j < CONFIG_JOINT_COUNT)
+    {
+        noInterrupts();
+        p = _positions[j];
+        interrupts();
+    }
     return p;
 }
 
-// ─── ISR ────────────────────────────────────────────────────
+long StepperManager::getTargetSteps(size_t j) const
+{
+    const auto &mp = _motions[j];
+    return mp.active ? (mp.startPos + mp.dir * mp.totalSteps)
+                     : _positions[j];
+}
+
+float StepperManager::getCurrentVelocity(size_t j) const
+{
+    if (_motions[j].active)
+        return _motions[j].currentV;
+    if (_jogActive[j])
+        return _jogCurrentV[j];
+    return 0;
+}
+
+float StepperManager::getCurrentAccel(size_t j) const
+{
+    const auto &mp = _motions[j];
+    if (mp.active)
+    {
+        if (mp.elapsed < mp.tAccel)
+            return mp.aMax;
+        else if (mp.elapsed < mp.tAccel + mp.tCruise)
+            return 0;
+        else if (mp.elapsed < mp.tTotal)
+            return -mp.aMax;
+        else
+            return 0;
+    }
+    if (_jogActive[j])
+        return _jogAccel[j];
+    return 0;
+}
+
 void StepperManager::isrTrampoline()
 {
     if (_inst)
@@ -191,97 +248,81 @@ void StepperManager::isrTrampoline()
 
 void StepperManager::isrHandler()
 {
-    // 1) handle trapezoid move
-    if (_motion.active)
-    {
-        float t = _motion.elapsed + _dtSec;
-        _motion.elapsed = t;
-
-        float v;
-        if (t < _motion.tAccel)
-        {
-            v = _motion.aMax * t;
-        }
-        else if (t < _motion.tAccel + _motion.tCruise)
-        {
-            v = _motion.vMax;
-        }
-        else if (t < _motion.tTotal)
-        {
-            float td = t - (_motion.tAccel + _motion.tCruise);
-            v = _motion.vMax - _motion.aMax * td;
-            if (v < 0)
-                v = 0;
-        }
-        else
-        {
-            _motion.active = false;
-            return;
-        }
-        if (v > _motion.vMax)
-            v = _motion.vMax;
-
-        float raw = v * _dtSec + _motion.remainder;
-        unsigned steps = unsigned(floorf(raw));
-        _motion.remainder = raw - float(steps);
-
-        // clamp to remaining steps
-        if (_motion.doneSteps + long(steps) >= _motion.totalSteps)
-        {
-            steps = unsigned(_motion.totalSteps - _motion.doneSteps);
-            _motion.active = false;
-        }
-        for (unsigned i = 0; i < steps; ++i)
-        {
-            digitalWriteFast(_stepPins[_motion.joint], HIGH);
-            delayMicroseconds(3);
-            digitalWriteFast(_stepPins[_motion.joint], LOW);
-            if (_motion.dir > 0)
-                ++_positions[_motion.joint];
-            else
-                --_positions[_motion.joint];
-        }
-        _motion.doneSteps += long(steps);
-    }
-
-    // 2) handle jogs
+    // clear previous pulse highs
     for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
     {
-        if (!_jogActive[j])
+        if (_pulseHigh[j])
+        {
+            digitalWriteFast(_stepPins[j], LOW);
+            _pulseHigh[j] = false;
+        }
+    }
+
+    for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
+    {
+        float v = 0;
+        int dir = 0;
+        bool runMotion = false;
+
+        auto &mp = _motions[j];
+        if (mp.active)
+        {
+            mp.elapsed += _dtSec;
+            if (mp.elapsed < mp.tAccel)
+                v = mp.aMax * mp.elapsed;
+            else if (mp.elapsed < mp.tAccel + mp.tCruise)
+                v = mp.vMax;
+            else if (mp.elapsed < mp.tTotal)
+            {
+                float td = mp.elapsed - (mp.tAccel + mp.tCruise);
+                v = mp.vMax - mp.aMax * td;
+                if (v < 0)
+                    v = 0;
+            }
+            else
+            {
+                mp.active = false;
+                continue;
+            }
+            if (v > mp.vMax)
+                v = mp.vMax;
+            dir = mp.dir;
+            mp.currentV = v;
+            runMotion = true;
+        }
+        else if (_jogActive[j])
+        {
+            // slew currentV toward targetV using accel
+            float dv = _jogAccel[j] * _dtSec;
+            float v0 = _jogCurrentV[j], vt = _jogTargetV[j];
+            float v1 = (fabsf(vt - v0) <= dv) ? vt : (v0 + ((vt > v0) ? dv : -dv));
+            _jogCurrentV[j] = v1;
+            v = v1;
+            dir = _jogDir[j];
+            runMotion = (v1 > 0.0f);
+        }
+
+        if (!runMotion)
             continue;
 
-        float dv = _jogAccel[j] * _dtSec;
-        float v0 = _jogCurrentV[j];
-        float vt = _jogTargetV[j];
-        float v1;
+        // accumulate fractional steps
+        float &acc = mp.stepAcc; // reuse per-joint accumulator
+        acc += v * _dtSec;
+        int steps = int(floorf(acc));
+        acc -= float(steps);
 
-        if (v0 == 0.0f || vt == 0.0f)
+        if (mp.active && (mp.doneSteps + steps >= mp.totalSteps))
         {
-            v1 = vt;
+            steps = mp.totalSteps - mp.doneSteps;
+            mp.active = false;
         }
-        else if (fabsf(vt - v0) <= dv)
-        {
-            v1 = vt;
-        }
-        else
-        {
-            v1 = v0 + (vt > v0 ? dv : -dv);
-        }
-        _jogCurrentV[j] = v1;
+        mp.doneSteps += steps;
 
-        float raw = v1 * _dtSec + _jogRem[j];
-        unsigned steps = unsigned(floorf(raw));
-        _jogRem[j] = raw - float(steps);
-
-        for (unsigned i = 0; i < steps; ++i)
+        while (steps-- > 0)
         {
             digitalWriteFast(_stepPins[j], HIGH);
-            delayMicroseconds(3);
-            digitalWriteFast(_stepPins[j], LOW);
-            if (_jogDir[j] > 0)
-                ++_positions[j];
-            else
-                --_positions[j];
+            _pulseHigh[j] = true;
+            _positions[j] += (dir > 0 ? +1 : -1);
         }
     }
 }

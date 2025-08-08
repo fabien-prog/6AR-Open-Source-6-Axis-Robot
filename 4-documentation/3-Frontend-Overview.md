@@ -1,11 +1,11 @@
 # React Frontend Overview
 
-## Architecture
+## 📐 Architecture
 
 ```bash
 [User]
   ⇅
-[React UI]
+[React UI + Electron Shell]
   ⇅  (via Socket.IO)
 [Node.js Pi Bridge Server]
   ⇅
@@ -14,99 +14,130 @@
 
 ---
 
-## Technologies Used
+## 🛠 Technologies Used
 
 * **React** (functional components, hooks)
-* **Chakra UI** (themeable component library)
+* **Chakra UI** (themeable UI components)
 * **Socket.IO** (real-time comms with backend)
-* **Three.js / drei** (for 3D robot visualization)
-* **Context API** (global state: system status, IO, joints)
-
-## Socket Communication
-
-All robot actions and telemetry flow through `socket.js`. Key events include:
-
-### Outgoing (`emit`)
-
-* `cmd`: sends raw JSON to Teensy (e.g., `{ cmd: "Home", joint: 2 }`)
-* `ik_request`, `fk_request`: queries to Python
-* `linearMove`, `linearMoveToTeensy`: stream or batch motion
-
-### Incoming (`on`)
-
-* `jointStatusAll`: joint state updates (position, velocity, target)
-* `linearMove_error`, `profileLinear_error`, etc.
-* `ik_response`, `fk_response`
-* `systemStatus`, `homed`, `inputStatus`, etc.
+* **Three.js / drei** (3D robot visualization)
+* **Zustand** (joint state & UI state store)
+* **React Context API** (`DataContext`) for shared system data
+* **react-beautiful-dnd** (block programming drag-and-drop)
+* **Electron** (packaged desktop app)
 
 ---
 
-## Main Features
+## 🔌 Socket Communication
 
-### Homing
+All robot actions and telemetry flow through the shared Socket.IO instance in `DataContext`.
 
-* UI triggers per-joint homing via `Home` command
-* Displays current min/max limits when complete
+### **Outgoing (`emit`)**
 
-### Jogging
+* `cmd` — sends raw JSON to Teensy (e.g., `{ cmd: "Home", joint: 2, speedFast: 50, speedSlow: 3 }`)
+* `ik_request`, `fk_request` — queries to Python IK service
+* `linearMove`, `linearMoveToTeensy` — stream or batch Cartesian moves
+* `profileLinear` — request a dry-run motion profile
+* Program control events — from block/program runner to backend
 
-* Per-joint jog buttons (±) with speed sliders
-* `Jog` and `StopJog` commands issued in real time
+### **Incoming (`on`)**
 
-### Joint Move
-
-* Axis-by-axis or full multi-joint movements
-* Uses Python-generated trapezoidal motion profile
-* **Currently only works in simulation**
-
-### IK-based Cartesian Move
-
-* Accepts XYZ + quaternion target
-* Streams or batches `MoveMultiple` joint commands over time
-
-### Program Execution
-
-* Load and run `.6ar` files with structured motion steps
-* Logs each step, estimated durations, and errors
-
-### IO Monitoring
-
-* Rquest, view and toggle output states
-* Request and view input states
-
-### System Monitoring
-
-* Uptime, estop status, current cycle count
-* Digital inputs and outputs
+* `jointStatusAll` — per-joint position, velocity, accel, target
+* `parameters` — full firmware parameter set
+* `linearMove_error`, `linearMoveComplete`
+* `profileLinear_response`, `profileLinear_error`
+* `ik_response`, `ik_error`, `fk_response`, `fk_error`
+* `systemStatus`, `homed`
+* `inputStatus`, `outputStatus`
+* Async Teensy events (`BatchExecStart`, `SegmentLoaded`, `BatchComplete`, `BatchAborted`)
 
 ---
 
-## UI Design Goals
+## 🚀 Main Features
 
-* **Single-page layout** with all key actions in one view
-* **Status bar** showing estop, uptime, and connection state
-* **Responsive layout** with tabs, modals, and tooltips
-* **Live robot viewer** on side (Three.js + joint angles)
-* **Batch + stream support** for trajectory execution
+### **Homing**
+
+* UI buttons for per-joint homing via `Home` command.
+* Shows progress state and final limit offsets.
+* Matches firmware’s fast → backoff → slow → offset sequence.
+
+### **Jogging**
+
+* Per-joint ± buttons with continuous hold.
+* Jog velocity & accel sliders tied to firmware `Jog` API (`target` in deg/s, `accel` in deg/s²).
+* `StopJog` issued immediately on release or switch hit.
+
+### **Joint Move**
+
+* Absolute or relative axis-by-axis moves.
+* Multi-joint synchronous moves using trapezoidal sync profiles from Python.
+* Honors joint limits from firmware.
+* Works on both simulated and real robot.
+
+### **IK-based Cartesian Move**
+
+* Accepts XYZ + quaternion or Euler targets.
+* Uses Python trapezoidal profiling for smooth motion.
+* **Streaming mode** — direct step-by-step updates to Teensy.
+* **Batched mode** — full profile sent to Teensy via `MoveMultiple`.
+
+### **Program Execution**
+
+* Load `.6ar` block-programming files.
+* Supports `MoveJ`, loops, variables, math, waits, and logging.
+* Program Runner sends moves via streaming or batch depending on block type.
+* Execution log shows timestamps, parameters, and errors.
+
+### **IO Monitoring**
+
+* View and toggle digital outputs.
+* View digital inputs in real time.
+* Names and enable flags come from firmware config.
+
+### **System Monitoring**
+
+* E-stop state, uptime, connection health.
+* Joint telemetry updated live at `CONTROL_DT` rate.
+* Parameter list from firmware (`ListParameters`).
 
 ---
 
-## Modularity
+## 🎯 UI Design Goals
 
-Each UI tab is self-contained:
-
-* Independent `useEffect` hooks for updates
-* Hooks into `DataContext` for shared state
-* Uses Chakra’s grid, button, stat, and modal components
+* **Single-page control panel** — 3D view, jog, home, moves, IO, and program control in one screen.
+* **Modal-based settings** — all configuration changes in popups, non-blocking.
+* **Real-time sync** — 3D viewer follows both simulated and real joint angles.
+* **Responsive layout** — works on wide desktop and reduced-width Electron windows.
+* **Status indicators** — E-stop, homed state, motion active, batch status.
 
 ---
 
-## Future Additions
+## 🧩 Modularity
 
-* Live TCP position readback overlay
-* Program editor with syntax highlighting
-* Program execution with logging and live feedback
-* IO diagnostic mode with pulse test
-* Real-time error overlays + debug console
+* **Tabs** — Actions, Move Axis, IO, Program Editor, Logs.
+* **Self-contained hooks** — each tab subscribes only to needed events.
+* **`useJointStore` (Zustand)** — decouples joint positions from UI re-renders.
+* **Three.js RobotLoader** — imports URDF/STL, animates joints with lerp for smooth visual motion.
+* **Block Editor** — draggable blocks with popovers, inline math editor, and syntax-preserving runner.
+
+---
+
+## 🔮 Future Additions
+
+* Live TCP overlay in viewer.
+* `MoveL` and `MoveC` in block editor.
+* More firmware commands in program runner (`SetDO`, `WaitDI`, etc.).
+* IO diagnostics (pulse output).
+* Real-time error overlay & debug console.
+* Toolpath preview in 3D for planned moves.
+
+---
+
+This updated version now matches:
+
+* **Your recent firmware jog API changes** (`target` + `accel` instead of `speed`).
+* **Program execution reality** (works on real robot, not just sim).
+* **Extra socket events** from new firmware batch/async notifications.
+* **Zustand integration** for joint state.
+* **Block programming UI upgrades** (popovers, inline math editor, drag/drop).
 
 ---

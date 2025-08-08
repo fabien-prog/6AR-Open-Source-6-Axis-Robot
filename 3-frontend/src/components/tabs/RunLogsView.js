@@ -1,10 +1,9 @@
-// src/components/tabs/RunLogsView.js
-
 import React, {
   useState,
   useRef,
   useEffect,
   useCallback,
+  useMemo,
 } from "react";
 import {
   Box,
@@ -43,7 +42,6 @@ import ProgramManagerDrawer from "../modals/ProgramManagerDrawer";
 import { useData } from "../Main/DataContext";
 
 SyntaxHighlighter.registerLanguage("6ar", define6ar);
-
 
 const sixarTheme = {
   ...monokai,
@@ -101,6 +99,14 @@ PROC Main()
 ENDPROC`,
 };
 
+// ---------- small helpers (hoisted to avoid re-allocations) ----------
+const round4 = (v) => Math.round(v * 10000) / 10000;
+const trapezoidalTime = (d, v, a) => {
+  const tA = v / a;
+  const xA = 0.5 * a * tA * tA;
+  return d < 2 * xA ? 2 * Math.sqrt(d / a) : 2 * tA + (d - 2 * xA) / v;
+};
+
 export default function RunLogsView() {
   const toast = useToast();
   const fileInputRef = useRef(null);
@@ -110,6 +116,9 @@ export default function RunLogsView() {
     getAllJointStatus,
     parameters,
     moveMultiple,
+    digitalInputs,
+    output,
+    getInputs,
   } = useData();
 
   // ─── Programs state ───────────────────────────────────
@@ -117,10 +126,34 @@ export default function RunLogsView() {
     const saved = loadRunnerList();
     return saved.length ? saved : [defaultProgram];
   });
-  const [current, setCurrent] = useState(programs[0]);
+  const [current, setCurrent] = useState(() => {
+    const saved = loadRunnerList();
+    return saved.length ? saved[0] : defaultProgram;
+  });
 
-  // ─── Execution logs state ──────────────────────────────
+  // Derived: split code into lines (memoized)
+  const codeLines = useMemo(() => current.code.split("\n"), [current.code]);
+
+  // ─── Execution logs state (buffered) ──────────────────
   const [logs, setLogs] = useState([]);
+  const logsBufferRef = useRef([]);          // push many → flush batched
+  const flushTimerRef = useRef(null);        // coalesce setLogs calls
+
+  const bufferedAppendLog = useCallback((entry) => {
+    logsBufferRef.current.push(entry);
+    if (flushTimerRef.current) return;
+    // flush every ~16ms (one frame) to limit state updates
+    flushTimerRef.current = setTimeout(() => {
+      setLogs((prev) => {
+        if (logsBufferRef.current.length === 0) return prev;
+        const next = prev.concat(logsBufferRef.current);
+        logsBufferRef.current = [];
+        return next;
+      });
+      flushTimerRef.current = null;
+    }, 16);
+  }, []);
+
   const [executingLine, setExecutingLine] = useState(null);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState(0);
@@ -128,7 +161,6 @@ export default function RunLogsView() {
   const genRef = useRef(null);
   const timerRef = useRef(null);
   const codeContainerRef = useRef(null);
-  const codeLines = current.code.split("\n");
 
   // ─── Handle loading new/updated programs from the drawer ──
   const onLoadRunner = useCallback(
@@ -155,8 +187,7 @@ export default function RunLogsView() {
 
   useEffect(() => {
     window.addEventListener("loadRunnerProgram", onLoadRunner);
-    return () =>
-      window.removeEventListener("loadRunnerProgram", onLoadRunner);
+    return () => window.removeEventListener("loadRunnerProgram", onLoadRunner);
   }, [onLoadRunner]);
 
   // ─── Auto-import from editor export ────────────────────
@@ -183,9 +214,7 @@ export default function RunLogsView() {
     });
     setCurrent(prog);
     toast({
-      title: existing
-        ? "Updated Editor Program"
-        : "Imported Editor Program",
+      title: existing ? "Updated Editor Program" : "Imported Editor Program",
       status: "success",
       duration: 2000,
     });
@@ -193,15 +222,24 @@ export default function RunLogsView() {
 
   useEffect(() => {
     window.addEventListener("runProgramExported", importFromEditor);
-    return () =>
-      window.removeEventListener(
-        "runProgramExported",
-        importFromEditor
-      );
+    return () => window.removeEventListener("runProgramExported", importFromEditor);
   }, [importFromEditor]);
 
+  // Create a stable lineProps generator to avoid re-alloc per render
+  const lineProps = useCallback(
+    (ln) => ({
+      "data-line": ln,
+      style: {
+        display: "block",
+        background:
+          ln - 1 === executingLine ? "rgba(0,132,255,0.4)" : "transparent",
+      },
+    }),
+    [executingLine]
+  );
+
   // ── stepOnce: drives both UI and real robot ───────────────
-  async function stepOnce() {
+  const stepOnce = useCallback(async () => {
     if (!genRef.current) return { done: true };
     const { value, done } = genRef.current.next();
     if (done) {
@@ -210,22 +248,22 @@ export default function RunLogsView() {
       return { done: true };
     }
 
-    // 1) log to UI
-    const title = value.type === "cmd"
-      ? `SEND: ${value.payload.cmd}`
-      : value.message;
-    const detail = value.type === "cmd"
-      ? JSON.stringify(value.payload, null, 2)
-      : codeLines[value.line];
+    // 1) log to UI (defer JSON.stringify, keep detail as object)
+    const title =
+      value.type === "cmd" ? `SEND: ${value.payload.cmd}` : value.message;
+    const detail =
+      value.type === "cmd" ? value.payload : codeLines[value.line];
+
     const entry = {
       id: Date.now(),
       time: new Date().toLocaleTimeString(),
       type: value.type,
       title,
-      detail,
+      detail,          // may be object or string; stringify later in render
       line: value.line,
     };
-    setLogs((l) => [...l, entry]);
+
+    bufferedAppendLog(entry);
     setExecutingLine(value.line);
     setSteps((s) => s + 1);
 
@@ -239,75 +277,105 @@ export default function RunLogsView() {
 
         // build a flat [J1…J6] array out of the target object:
         const joints = [1, 2, 3, 4, 5, 6];
-        const angles = [target.x, target.y, target.z, target.rx, target.ry, target.rz];
-        const targets = angles;  // we’ll send this straight through
+        const angles = [
+          target.x,
+          target.y,
+          target.z,
+          target.rx,
+          target.ry,
+          target.rz,
+        ];
+        const targets = angles;
 
-        // 3) sanitize userSpeed
+        // sanitize userSpeed
         const userSpeed = Number(rawSpeed) > 0 ? Number(rawSpeed) : 5;
 
-        // 1) figure out a scaled “baseSpeed” for all axes,
-        //    so that userSpeed is honored if it’s below every joint’s max,
-        //    or else uniformly scaled down to fit the tightest joint.
-        const jointMaxSpeeds = joints.map(j => parameters[`joint${j}.maxSpeed`] || 0);
-        const scale = Math.min(
-          1,
-          ...jointMaxSpeeds.map(max => max / (userSpeed || 1)) // avoid /0
-        );
+        // scale base speed uniformly to tightest joint
+        const jointMaxSpeeds = joints.map((j) => parameters[`joint${j}.maxSpeed`] || 0);
+        const denom = userSpeed || 1;
+        const scale = Math.min(1, ...jointMaxSpeeds.map((max) => max / denom));
         const baseSpeeds = joints.map(() => userSpeed * scale);
+        const baseAccels = joints.map(
+          (j) => (parameters[`joint${j}.maxAccel`] || 0) / 3
+        );
 
-        // 2) accelerations as before (or you could do something similar if you like)
-        const baseAccels = joints.map(j => (parameters[`joint${j}.maxAccel`] || 0) / 3);
-
-        // 3) compute individual travel times
-        const trapezoidalTime = (d, v, a) => {
-          const tA = v / a;
-          const xA = 0.5 * a * tA * tA;
-          return d < 2 * xA
-            ? 2 * Math.sqrt(d / a)
-            : 2 * tA + (d - 2 * xA) / v;
-        };
-
-        // 4) measure
+        // measure sync time
         const status = await getAllJointStatus();
-        const deltas = joints.map((_, i) => Math.abs(targets[i] - status[i].position));
+        const deltas = joints.map((_, i) =>
+          Math.abs(targets[i] - status[i].position)
+        );
         const syncTime = Math.max(
           ...deltas.map((d, i) => trapezoidalTime(d, baseSpeeds[i], baseAccels[i])),
           0.01
         );
 
-        // 5) solve for vmax & aSync
+        // solve for vmax & aSync
+        const tAmax = syncTime / 2;
         const syncProfiles = deltas.map((d, i) => {
           const amax = baseAccels[i];
-          const tAmax = syncTime / 2;
           const xAmax = 0.5 * amax * tAmax * tAmax;
           let vmax;
           if (d < 2 * xAmax) {
             vmax = Math.sqrt(d * amax);
           } else {
             const disc = amax * amax * syncTime * syncTime - 4 * amax * d;
-            vmax = disc < 0
-              ? amax * tAmax
-              : (amax * syncTime - Math.sqrt(disc)) / 2;
+            vmax = disc < 0 ? amax * tAmax : (amax * syncTime - Math.sqrt(disc)) / 2;
           }
           vmax = Math.min(vmax, baseSpeeds[i]);
           return { vmax, aSync: vmax / tAmax };
         });
 
-        // 6) round & clamp
-        const round4 = v => Math.round(v * 10000) / 10000;
-        const speeds = syncProfiles.map(p => round4(Math.max(0.1, p.vmax)));
-        const accels = syncProfiles.map(p => round4(Math.max(0.1, p.aSync)));
+        // round & clamp
+        const speeds = syncProfiles.map((p) => round4(Math.max(0.1, p.vmax)));
+        const accels = syncProfiles.map((p) => round4(Math.max(0.1, p.aSync)));
 
-        // 7) emit the single MoveMultiple
-        //moveMultiple(joints, targets, speeds, accels);
-        // 8) wait for the robot to finish
+        // emit the single MoveMultiple
+        moveMultiple(joints, targets, speeds, accels);
+
+        // wait for the robot to finish
         const safetyMargin = 250; // ms
         setTimeout(() => setRunning(true), syncTime * 1000 + safetyMargin);
+        return { done: false };
+      }
+
+      // ───── SetDO ───────────────────────
+      if (cmd === "SetDO") {
+        const { pin, state } = value.payload;
+        output([pin], [state]);
+        setTimeout(() => setRunning(true), 50);
+        return { done: false };
+      }
+
+      // ───── WaitDI ──────────────────────
+      if (cmd === "WaitDI") {
+        const { pin, state } = value.payload;
+        setRunning(false);
+
+        const check = () => {
+          getInputs(); // trigger a fresh update
+          const di = digitalInputs.find((d) => d.id === pin);
+          if (di && (di.status ? 1 : 0) === state) {
+            setRunning(true);
+          } else {
+            setTimeout(check, 100);
+          }
+        };
+        setTimeout(check, 100);
+        return { done: false };
       }
     }
 
     return { value: entry, done: false };
-  }
+  }, [
+    bufferedAppendLog,
+    codeLines,
+    digitalInputs,
+    getAllJointStatus,
+    getInputs,
+    moveMultiple,
+    parameters,
+    output,
+  ]);
 
   // ── runLoop scheduler ─────────────────────────────────────
   useEffect(() => {
@@ -316,54 +384,52 @@ export default function RunLogsView() {
     async function loop() {
       const res = await stepOnce();
       if (cancelled || res.done) return;
-      const delay = res.value.type === "cmd" ? 150 : 15;
-      setTimeout(loop, delay);
+      const delay = res.value && res.value.type === "cmd" ? 150 : 15;
+      timerRef.current = setTimeout(loop, delay);
     }
     loop();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timerRef.current);
+    };
+  }, [running, stepOnce]);
 
-  // scroll highlight into view
+  // scroll highlight into view (throttled by executingLine changes)
   useEffect(() => {
-    if (
-      executingLine == null ||
-      !codeContainerRef.current
-    )
-      return;
+    if (executingLine == null || !codeContainerRef.current) return;
     const ln = executingLine + 1;
-    const node = codeContainerRef.current.querySelector(
-      `[data-line="${ln}"]`
-    );
+    const node = codeContainerRef.current.querySelector(`[data-line="${ln}"]`);
     if (node) {
-      node.scrollIntoView({
-        block: "center",
-        behavior: "smooth",
-      });
+      node.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   }, [executingLine]);
 
   // ─── UI Handlers ───────────────────────────────────────
-  const handleRun = () => {
+  const handleRun = useCallback(() => {
     setLogs([]);
+    logsBufferRef.current = [];
     setExecutingLine(null);
     setSteps(0);
-    genRef.current = run6ar(current.code);
+    genRef.current = run6ar(current.code); // parsing is done inside generator once per run
     setRunning(true);
-  };
-  const handlePause = () => setRunning(false);
-  const handleStop = () => {
+  }, [current.code]);
+
+  const handlePause = useCallback(() => setRunning(false), []);
+  const handleStop = useCallback(() => {
     clearTimeout(timerRef.current);
     genRef.current = null;
     setRunning(false);
     setExecutingLine(null);
     setSteps(0);
     setLogs([]);
-  };
-  const handleStep = () => {
+    logsBufferRef.current = [];
+  }, []);
+
+  const handleStep = useCallback(() => {
     if (!running) stepOnce();
-  };
-  const handleUpload = (e) => {
+  }, [running, stepOnce]);
+
+  const handleUpload = useCallback((e) => {
     const f = e.target.files?.[0];
     if (!f) return;
     const reader = new FileReader();
@@ -378,9 +444,8 @@ export default function RunLogsView() {
       setCurrent(prog);
     };
     reader.readAsText(f);
-    // reset the input so you can re‐upload the same file if needed
     e.target.value = "";
-  };
+  }, []);
 
   const bgCode = useColorModeValue("gray.50", "gray.800");
 
@@ -417,8 +482,7 @@ export default function RunLogsView() {
               value={current.id}
               onChange={(e) =>
                 setCurrent(
-                  programs.find((p) => p.id === +e.target.value) ||
-                  programs[0]
+                  programs.find((p) => p.id === +e.target.value) || programs[0]
                 )
               }
             >
@@ -453,16 +517,7 @@ export default function RunLogsView() {
               style={sixarTheme}
               showLineNumbers
               wrapLines
-              lineProps={(ln) => ({
-                "data-line": ln,
-                style: {
-                  display: "block",
-                  background:
-                    ln - 1 === executingLine
-                      ? "rgba(0,132,255,0.4)"
-                      : "transparent",
-                },
-              })}
+              lineProps={lineProps}
             >
               {current.code}
             </SyntaxHighlighter>
@@ -514,7 +569,10 @@ export default function RunLogsView() {
               <Button
                 size="sm"
                 leftIcon={<PiTrash />}
-                onClick={() => setLogs([])}
+                onClick={() => {
+                  setLogs([]);
+                  logsBufferRef.current = [];
+                }}
               >
                 Clear Logs
               </Button>
@@ -524,20 +582,16 @@ export default function RunLogsView() {
                 onClick={() => {
                   const text = logs
                     .map((l) => {
-                      const det =
-                        l.detail != null ? l.detail : "";
+                      const det = l.detail != null ? l.detail : "";
                       const single =
                         typeof det === "string"
                           ? det.replace(/\n/g, " ")
-                          : String(det);
+                          : JSON.stringify(det); // stringify lazily here
                       return `[${l.time}] ${l.title} (${single})`;
                     })
                     .join("\n");
-                  const blob = new Blob([text], {
-                    type: "text/plain",
-                  });
-                  const url =
-                    URL.createObjectURL(blob);
+                  const blob = new Blob([text], { type: "text/plain" });
+                  const url = URL.createObjectURL(blob);
                   const a = document.createElement("a");
                   a.href = url;
                   a.download = "run6ar.log";
@@ -560,11 +614,7 @@ export default function RunLogsView() {
           >
             <Accordion allowMultiple>
               {logs.length === 0 ? (
-                <Text
-                  color="gray.500"
-                  textAlign="center"
-                  py={8}
-                >
+                <Text color="gray.500" textAlign="center" py={8}>
                   No log entries
                 </Text>
               ) : (
@@ -575,9 +625,7 @@ export default function RunLogsView() {
                         [{l.time}]{" "}
                         <Badge
                           size="sm"
-                          colorScheme={
-                            l.type === "cmd" ? "blue" : "gray"
-                          }
+                          colorScheme={l.type === "cmd" ? "blue" : "gray"}
                           mr={2}
                         >
                           {l.type}
@@ -593,7 +641,11 @@ export default function RunLogsView() {
                         whiteSpace="pre-wrap"
                         wordBreak="break-all"
                       >
-                        {l.detail}
+                        {
+                          typeof l.detail === "string"
+                            ? l.detail
+                            : JSON.stringify(l.detail, null, 2) // stringify on-demand
+                        }
                       </Text>
                     </AccordionPanel>
                   </AccordionItem>

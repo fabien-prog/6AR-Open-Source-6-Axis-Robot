@@ -14,8 +14,8 @@ const uint8_t LIMIT_PINS[LIMIT_COUNT] = {
     40, 41};
 
 // Stepper driver pins
-const uint8_t STEPPER_DIR_PINS[STEPPER_COUNT] = {26, 27, 28, 31, 30, 29};
-const uint8_t STEPPER_PULSE_PINS[STEPPER_COUNT] = {2, 3, 4, 9, 6, 5};
+const uint8_t STEPPER_DIR_PINS[STEPPER_COUNT] = {26, 28, 27, 31, 30, 29};
+const uint8_t STEPPER_PULSE_PINS[STEPPER_COUNT] = {2, 4, 3, 9, 6, 5};
 
 // Relay pin assignments
 const uint8_t RELAY_PINS[RELAY_COUNT] = {

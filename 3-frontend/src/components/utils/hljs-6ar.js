@@ -1,6 +1,6 @@
 // src\components\utils\hljs-6ar.js
 export default function hljs6ar(hljs) {
-  const COMMANDS = /\b(?:MoveL|MoveJ|Home|LOG|Counter)\b/;
+  const COMMANDS = /\b(?:MoveL|MoveJ|Home|LOG|Counter|SetDO|WaitDI)\b/;
   const MODES    = /\b(?:Cartesian|Joint)\b/;
   const PARAMS   = /\b(?:Speed|STEP|INIT|INC|TO)\b/;
   const VARS     = /\b[A-Z][A-Z0-9_]*\b/;  // all-caps identifiers

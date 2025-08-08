@@ -25,14 +25,8 @@ struct JointConfig
   uint8_t pulsePin;      // 12) step pulse pin
   uint8_t dirPin;        // 13) direction pin
   uint8_t unused;        // 14) _pad_ (to keep struct sizeof alignment; you can repurpose or remove if you like)
-
-  // ← New PID gains (deg → deg/s output)
-  float Kp;
-  float Ki;
-  float Kd;
-
-  float maxJointSpeed;  // 15) max joint speed (deg/s)
-  float positionFactor; // 18) scale factor for real joint output
+  float maxJointSpeed;   // 15) max joint speed (deg/s)
+  float positionFactor;  // 18) scale factor for real joint output
 };
 
 constexpr size_t CONFIG_JOINT_COUNT = STEPPER_COUNT;

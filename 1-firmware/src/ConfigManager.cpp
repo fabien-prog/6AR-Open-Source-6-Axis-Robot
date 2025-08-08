@@ -48,12 +48,19 @@ void ConfigManager::loadConfig()
 
 void ConfigManager::saveConfig()
 {
+    // serializeJson returns the number of bytes written (not including null),
+    // or 0 on overflow
     char buf[CFG_EEPROM_SIZE];
     size_t n = serializeJson(_doc, buf, CFG_EEPROM_SIZE);
-    for (size_t i = 0; i < CFG_EEPROM_SIZE; ++i)
+    if (n == 0)
     {
-        EEPROM.write(CFG_EEPROM_ADDR + i, i < n ? buf[i] : 0xFF);
+        Serial.println("[ConfigManager] ERROR: JSON overflow; config too large to save");
+        // early-exit without writing partial/garbage to EEPROM
+        return;
     }
+
+    for (size_t i = 0; i < CFG_EEPROM_SIZE; ++i)
+        EEPROM.write(CFG_EEPROM_ADDR + i, i < n ? buf[i] : 0xFF);
     dirty = false; // clear dirty now that we’ve committed
 }
 

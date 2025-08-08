@@ -58,101 +58,78 @@ def compute_ik(pos, rot, seed):
 
 # ——— Linear move with trapezoidal velocity profile ———
 def profile_linear_move(req):
-    """
-    Precompute a joint trajectory with trapezoidal velocity profile.
-    Outputs:
-        - initial & final joint angles
-        - per-step joint speeds and accelerations
-        - fixed timestep (dt)
-    """
     global last_q
 
-    # ——— Extract inputs ———
     p1       = np.array(req["position"])
     quat1    = req.get("quaternion", [0,0,0,1])
     v_tcp    = req.get("speed", V_TCP)
     a_tcp    = req.get("accel", 0.1)
     ang_spd  = np.deg2rad(req.get("angular_speed_deg", ANG_SPEED))
     jl       = req.get("jointLimits", {})
-    vmaxJ    = np.array(jl.get("maxSpeed", [1e6]*nq))    # per-joint velocity limit
-    amaxJ    = np.array(jl.get("maxAccel", [1e6]*nq))    # per-joint acceleration limit
+    vmaxJ    = np.array(jl.get("maxSpeed", [1e6]*nq))
+    amaxJ    = np.array(jl.get("maxAccel", [1e6]*nq))
 
-    # ——— Initial and final joint states ———
     q0       = last_q.copy()
-    q0deg    = np.degrees(q0)
     R1       = R.from_quat(quat1).as_matrix()
     qN, _    = compute_ik(p1.tolist(), R1, q0)
-    qNdeg    = np.degrees(qN)
 
-    # ——— Initial TCP pose ———
     p0, R0mat, _ = compute_fk(q0)
-    p0           = np.array(p0)
-    R0           = np.array(R0mat)
+    p0 = np.array(p0); R0 = np.array(R0mat)
 
-    # ——— Linear and angular travel ———
-    d_xyz        = np.linalg.norm(p1 - p0)
-    R_delta      = R.from_matrix(R1) * R.from_matrix(R0).inv()
-    theta        = R_delta.magnitude()  # angular distance (rad)
+    d_xyz   = np.linalg.norm(p1 - p0)
+    theta   = (R.from_matrix(R1) * R.from_matrix(R0).inv()).magnitude()
+    T_lin   = d_xyz / max(v_tcp, 1e-6)
+    T_ang   = theta  / max(ang_spd, 1e-6)
+    T       = max(T_lin, T_ang)
 
-    # ——— Total move time ———
-    T_lin        = d_xyz / max(v_tcp, 1e-6)
-    T_ang        = theta / max(ang_spd, 1e-6)
-    T            = max(T_lin, T_ang)
-
-    # ——— Time profile (trapezoid) ———
-    t_acc        = min(v_tcp/a_tcp, 0.2*T)
+    t_acc = min(v_tcp/a_tcp, 0.2*T) if a_tcp > 0 else 0.0
     if 2*t_acc > T: t_acc = T/2
-    t_flat       = T - 2*t_acc
+    t_flat = T - 2*t_acc
 
-    # Travel fraction as a function of time (0 to 1)
     def s_of_t(t):
         if t < t_acc:
-            return 0.5 * a_tcp * t**2 / d_xyz
+            return 0.5*a_tcp*t*t / d_xyz
         elif t < t_acc + t_flat:
-            return (0.5*a_tcp*t_acc**2 + v_tcp*(t-t_acc)) / d_xyz
+            return (0.5*a_tcp*t_acc*t_acc + v_tcp*(t-t_acc)) / d_xyz
         else:
             td = T - t
-            return 1 - 0.5*a_tcp*td**2 / d_xyz
+            return 1 - 0.5*a_tcp*td*td / d_xyz
 
-    # ——— Generate waypoints along trajectory ———
-    N            = int(np.ceil(T/CONTROL_DT))+1
-    t_arr        = np.linspace(0, T, N)
-    waypoints_q  = []
-    slerp        = Slerp([0,1], R.from_matrix([R0, R1]))
+    N       = int(np.ceil(T/CONTROL_DT)) + 1
+    t_arr   = np.linspace(0, T, N)
+    way_q   = []
+    slerp   = Slerp([0,1], R.from_matrix([R0, R1]))
 
     for t in t_arr:
-        s        = np.clip(s_of_t(t), 0.0, 1.0)
-        pt       = (1-s)*p0 + s*p1
-        Rt       = slerp(s).as_matrix()
-        qi, _    = compute_ik(pt.tolist(), Rt, waypoints_q[-1] if waypoints_q else q0)
-        waypoints_q.append(qi)
+        s  = float(np.clip(s_of_t(t), 0.0, 1.0))
+        pt = (1-s)*p0 + s*p1
+        Rt = slerp(s).as_matrix()
+        qi,_ = compute_ik(pt.tolist(), Rt, way_q[-1] if way_q else q0)
+        way_q.append(qi)
 
-    # ——— Compute joint speeds and accels between steps ———
     speeds = []
     accels = []
-    prev_q = np.degrees(waypoints_q[0])
+    prev_q = np.degrees(way_q[0])
     prev_v = np.zeros(nq)
 
-    for i in range(len(waypoints_q)-1):
-        q1deg = np.degrees(waypoints_q[i+1])
+    for i in range(len(way_q)-1):
+        q1deg = np.degrees(way_q[i+1])
         vdeg  = (q1deg - prev_q) / CONTROL_DT
         adeg  = (vdeg - prev_v) / CONTROL_DT
-
-        # clamp to joint limits
         vdeg  = np.clip(vdeg, -vmaxJ, vmaxJ)
         adeg  = np.clip(adeg, -amaxJ, amaxJ)
-
         speeds.append(vdeg.round(3).tolist())
         accels.append(np.abs(adeg).round(3).tolist())
-
         prev_q, prev_v = q1deg, vdeg
 
-    last_q = waypoints_q[-1].copy()  # update global joint state
+    # NEW: add a final "come to rest" slice
+    speeds.append((np.zeros(nq)).tolist())
+    accels.append(amaxJ.round(3).tolist())
 
-    # ——— Output profile ———
+    last_q = way_q[-1].copy()
     print(json.dumps({
-        "initial": q0deg.tolist(),
-        "final":   qNdeg.tolist(),
+        "initial": np.degrees(q0).tolist(),
+        "final":   np.degrees(qN).tolist(),
         "dt":      CONTROL_DT,
         "speeds":  speeds,
         "accels":  accels

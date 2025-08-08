@@ -1,6 +1,5 @@
-// src/components/ProgramEditor.jsx
 /* eslint-disable react/jsx-no-comment-textnodes */
-import React, { useState, useReducer, useEffect, useCallback } from "react";
+import React, { useState, useReducer, useEffect, useCallback, useMemo } from "react";
 import {
   Box,
   Button,
@@ -28,7 +27,7 @@ import VariableEditor from "./VariableEditor";
 import ProgramManagerDrawer from "../modals/ProgramManagerDrawer";
 import { generateCode } from "./codeGenerator";
 
-// ——— Block defaults ———
+// ——— Block defaults (module-level, stable) ———
 const defaultParams = {
   "Move L": {
     src: "manual",
@@ -64,16 +63,15 @@ const defaultParams = {
   "End For": {},
   Else: {},
   "Console Log": { message: "", level: "info" },
-  "Math": {
-    varName: "",        // name of the variable to assign into
-    expression: "",     // e.g. "a + b * 2"
-  },
+  Math: { varName: "", expression: "" },
+  SetDO: { pin: "1", state: "1" },
+  WaitDI: { pin: "1", state: "1" }
 };
 
 // ——— Initial empty program state ———
 const initialState = { blocks: [], variables: [] };
 
-// ——— Reducer for blocks + variables ———
+// ——— Reducer for blocks + variables (pure & stable) ———
 function reducer(state, action) {
   switch (action.type) {
     case "SET_STATE":
@@ -88,10 +86,7 @@ function reducer(state, action) {
         ),
       };
     case "REMOVE_BLOCK":
-      return {
-        ...state,
-        blocks: state.blocks.filter((_, i) => i !== action.index),
-      };
+      return { ...state, blocks: state.blocks.filter((_, i) => i !== action.index) };
     case "REORDER_BLOCKS":
       return { ...state, blocks: action.payload };
     case "ADD_VARIABLE":
@@ -104,10 +99,7 @@ function reducer(state, action) {
         ),
       };
     case "REMOVE_VARIABLE":
-      return {
-        ...state,
-        variables: state.variables.filter((_, i) => i !== action.index),
-      };
+      return { ...state, variables: state.variables.filter((_, i) => i !== action.index) };
     case "REORDER_VARIABLES":
       return { ...state, variables: action.payload };
     default:
@@ -123,15 +115,15 @@ function useHistory(initialPresent) {
     future: [],
   });
 
-  const updateHistory = (newPresent) => {
+  const updateHistory = useCallback((newPresent) => {
     setHistory((h) => ({
       past: [...h.past, h.present],
       present: newPresent,
       future: [],
     }));
-  };
+  }, []);
 
-  const undo = () => {
+  const undo = useCallback(() => {
     let prev = null;
     setHistory((h) => {
       const { past, present, future } = h;
@@ -144,9 +136,9 @@ function useHistory(initialPresent) {
       };
     });
     return prev;
-  };
+  }, []);
 
-  const redo = () => {
+  const redo = useCallback(() => {
     let nextVal = null;
     setHistory((h) => {
       const { past, present, future } = h;
@@ -159,12 +151,12 @@ function useHistory(initialPresent) {
       };
     });
     return nextVal;
-  };
+  }, []);
 
   return [history.present, updateHistory, undo, redo];
 }
 
-// ——— Helpers to group blocks in view mode ———
+// ——— Helpers to group blocks in view mode (pure; memo’d below) ———
 function groupBlocks(blocks) {
   const result = [];
   let i = 0;
@@ -173,26 +165,17 @@ function groupBlocks(blocks) {
     if (b.type === "If") {
       const group = { ...b, thenChildren: [], elseChildren: [] };
       i++;
-      let depth = 1,
-        insideElse = false,
-        thenArr = [],
-        elseArr = [];
+      let depth = 1, insideElse = false, thenArr = [], elseArr = [];
       while (i < blocks.length && depth > 0) {
         const cur = blocks[i];
         if (cur.type === "If") depth++;
         else if (cur.type === "End If") {
           depth--;
-          if (depth === 0) {
-            i++;
-            break;
-          }
+          if (depth === 0) { i++; break; }
         } else if (cur.type === "Else" && depth === 1) {
-          insideElse = true;
-          i++;
-          continue;
+          insideElse = true; i++; continue;
         }
-        if (!insideElse) thenArr.push(cur);
-        else elseArr.push(cur);
+        if (!insideElse) thenArr.push(cur); else elseArr.push(cur);
         i++;
       }
       group.thenChildren = groupBlocks(thenArr);
@@ -201,17 +184,13 @@ function groupBlocks(blocks) {
     } else if (b.type === "For Loop") {
       const group = { ...b, children: [] };
       i++;
-      let depth = 1,
-        inner = [];
+      let depth = 1, inner = [];
       while (i < blocks.length && depth > 0) {
         const cur = blocks[i];
         if (cur.type === "For Loop") depth++;
         else if (cur.type === "End For") {
           depth--;
-          if (depth === 0) {
-            i++;
-            break;
-          }
+          if (depth === 0) { i++; break; }
         }
         if (depth > 0) inner.push(cur);
         i++;
@@ -221,14 +200,13 @@ function groupBlocks(blocks) {
     } else if (b.type === "End If" || b.type === "End For") {
       i++;
     } else {
-      result.push(b);
-      i++;
+      result.push(b); i++;
     }
   }
   return result;
 }
 
-// ——— Render variables in view mode ———
+// ——— Render variables in view mode (pure) ———
 function renderVariableDeclarations(vars) {
   return vars.map((v, i) => {
     let decl = "";
@@ -244,7 +222,7 @@ function renderVariableDeclarations(vars) {
   });
 }
 
-// ——— Render grouped blocks in view mode ———
+// ——— Render grouped blocks in view mode (pure) ———
 const viewBlockColors = {
   If: "cyan.400",
   Else: "cyan.400",
@@ -271,19 +249,13 @@ function renderGroupedBlocks(blocks, indent = 0) {
     );
     if (b.type === "If") {
       const left =
-        b.variableSource === "IO"
-          ? b.io
-          : b.variableSource === "Variable"
-            ? b.io
+        b.variableSource === "IO" ? b.io
+          : b.variableSource === "Variable" ? b.io
             : b.condition;
       return (
         <Box key={idx} pl={indent} mb={1}>
           <Text fontFamily="monospace" color={color}>
-            {renderLine(
-              <>
-                if ( {left} {b.operator} {b.value} ) {"{"}
-              </>
-            )}
+            {renderLine(<>if ( {left} {b.operator} {b.value} ) {"{"}</>)}
           </Text>
           <Box pl={4}>{renderGroupedBlocks(b.thenChildren, indent + 4)}</Box>
           {b.elseChildren.length > 0 && (
@@ -296,25 +268,17 @@ function renderGroupedBlocks(blocks, indent = 0) {
               </Box>
             </>
           )}
-          <Text fontFamily="monospace" color="gray.500" pl={indent}>
-            {"}"}
-          </Text>
+          <Text fontFamily="monospace" color="gray.500" pl={indent}>{"}"}</Text>
         </Box>
       );
     } else if (b.type === "For Loop") {
       return (
         <Box key={idx} pl={indent} mb={1}>
           <Text fontFamily="monospace" color={color}>
-            {renderLine(
-              <>
-                {`for (${b.counter} = ${b.start}; ${b.counter} <= ${b.end}; ${b.counter} += ${b.step}) {`}
-              </>
-            )}
+            {renderLine(<>{`for (${b.counter} = ${b.start}; ${b.counter} <= ${b.end}; ${b.counter} += ${b.step}) {`}</>)}
           </Text>
           <Box pl={4}>{renderGroupedBlocks(b.children, indent + 4)}</Box>
-          <Text fontFamily="monospace" color="gray.500" pl={indent}>
-            {"}"}
-          </Text>
+          <Text fontFamily="monospace" color="gray.500" pl={indent}>{"}"}</Text>
         </Box>
       );
     } else if (b.type === "Console Log") {
@@ -331,29 +295,21 @@ function renderGroupedBlocks(blocks, indent = 0) {
       return (
         <Box key={idx} pl={indent} mb={1}>
           <Text fontFamily="monospace" color={color}>
-            {renderLine(
-              <>{cmd}({target}, speed={b.speed}, ref={b.referenceType});</>
-            )}
+            {renderLine(<>{cmd}({target}, speed={b.speed}, ref={b.referenceType});</>)}
           </Text>
         </Box>
       );
     } else if (b.type === "Home") {
       return (
         <Box key={idx} pl={indent} mb={1}>
-          <Text fontFamily="monospace" color={color}>
-            {renderLine(<>Home();</>)}
-          </Text>
+          <Text fontFamily="monospace" color={color}>{renderLine(<>Home();</>)}</Text>
         </Box>
       );
     } else if (b.type === "Counter") {
       return (
         <Box key={idx} pl={indent} mb={1}>
           <Text fontFamily="monospace" color={color}>
-            {renderLine(
-              <>
-                Counter({b.name}, init={b.initial}, inc={b.increment}, to={b.target});
-              </>
-            )}
+            {renderLine(<>Counter({b.name}, init={b.initial}, inc={b.increment}, to={b.target});</>)}
           </Text>
         </Box>
       );
@@ -372,17 +328,10 @@ function renderGroupedBlocks(blocks, indent = 0) {
 
 // ——— Multi‐program storage ———
 const editorKey = "programEditorPrograms";
-const defaultEditorProgram = {
-  id: 1,
-  name: "Untitled Program",
-  state: initialState,
-};
+const defaultEditorProgram = { id: 1, name: "Untitled Program", state: initialState };
 function loadEditorList() {
-  try {
-    return JSON.parse(localStorage.getItem(editorKey) || "[]");
-  } catch {
-    return [];
-  }
+  try { return JSON.parse(localStorage.getItem(editorKey) || "[]"); }
+  catch { return []; }
 }
 function saveEditorList(list) {
   localStorage.setItem(editorKey, JSON.stringify(list));
@@ -398,14 +347,14 @@ export default function ProgramEditor() {
     const saved = loadEditorList();
     return saved.length ? saved : [defaultEditorProgram];
   });
-  const [currentProgram, setCurrentProgram] = useState(programs[0]);
+  const [currentProgram, setCurrentProgram] = useState(() => {
+    const saved = loadEditorList();
+    return saved.length ? saved[0] : defaultEditorProgram;
+  });
 
   // history & reducer
   const [, updateHistory, undo, redo] = useHistory(initialState);
-  const [state, dispatch] = useReducer(
-    reducer,
-    currentProgram.state || initialState
-  );
+  const [state, dispatch] = useReducer(reducer, currentProgram.state || initialState);
 
   // UI state
   const [editMode, setEditMode] = useState(true);
@@ -414,79 +363,53 @@ export default function ProgramEditor() {
 
   // sync editor state to currentProgram
   useEffect(() => {
-    dispatch({
-      type: "SET_STATE",
-      payload: currentProgram.state || initialState,
-    });
+    dispatch({ type: "SET_STATE", payload: currentProgram.state || initialState });
   }, [currentProgram]);
 
   // handle load from drawer
-  const onLoadEditor = useCallback(
-    (e) => {
-      const prog = e.detail; // { id, name, state }
-      setPrograms((prev) => {
-        const exists = prev.find((p) => p.id === prog.id);
-        const next = exists
-          ? prev.map((p) => (p.id === prog.id ? prog : p))
-          : [...prev, prog];
-        saveEditorList(next);
-        return next;
-      });
-      setCurrentProgram(prog);
-      toast({
-        title: `Loaded "${prog.name}"`,
-        status: "info",
-        duration: 2000,
-      });
-      onClose();
-    },
-    [toast, onClose]
-  );
+  const onLoadEditor = useCallback((e) => {
+    const prog = e.detail; // { id, name, state }
+    setPrograms((prev) => {
+      const exists = prev.find((p) => p.id === prog.id);
+      const next = exists ? prev.map((p) => (p.id === prog.id ? prog : p)) : [...prev, prog];
+      saveEditorList(next);
+      return next;
+    });
+    setCurrentProgram(prog);
+    toast({ title: `Loaded "${prog.name}"`, status: "info", duration: 2000 });
+    onClose();
+  }, [toast, onClose]);
+
   useEffect(() => {
     window.addEventListener("loadEditorProgram", onLoadEditor);
-    return () =>
-      window.removeEventListener("loadEditorProgram", onLoadEditor);
+    return () => window.removeEventListener("loadEditorProgram", onLoadEditor);
   }, [onLoadEditor]);
 
   // create new blank
-  const createNewProgram = () => {
+  const createNewProgram = useCallback(() => {
     const id = Date.now();
-    const prog = {
-      id,
-      name: `Program ${programs.length + 1}`,
-      state: initialState,
-    };
+    const prog = { id, name: `Program ${programs.length + 1}`, state: initialState };
     const next = [...programs, prog];
     saveEditorList(next);
     setPrograms(next);
     setCurrentProgram(prog);
-    toast({
-      title: `Created "${prog.name}"`,
-      status: "success",
-      duration: 2000,
-    });
-  };
+    toast({ title: `Created "${prog.name}"`, status: "success", duration: 2000 });
+  }, [programs, toast]);
 
   // save current program state
-  const saveCurrentProgram = () => {
+  const saveCurrentProgram = useCallback(() => {
     const updated = { ...currentProgram, state };
     setPrograms((prev) => {
-      const next = prev.map((p) =>
-        p.id === updated.id ? updated : p
-      );
+      const next = prev.map((p) => (p.id === updated.id ? updated : p));
       saveEditorList(next);
       return next;
     });
     setCurrentProgram(updated);
-    toast({
-      title: `Saved "${updated.name}"`,
-      status: "success",
-      duration: 2000,
-    });
-  };
+    toast({ title: `Saved "${updated.name}"`, status: "success", duration: 2000 });
+  }, [currentProgram, state, toast]);
 
   // export code (with optional download)
-  const exportCode = ({ download = false } = {}) => {
+  const exportCode = useCallback(({ download = false } = {}) => {
     const code = generateCode(state);
     localStorage.setItem("runProgram", code);
     toast({ title: "Exported to runner", status: "success", duration: 2000 });
@@ -500,40 +423,35 @@ export default function ProgramEditor() {
       URL.revokeObjectURL(url);
       toast({ title: "Code downloaded", status: "success", duration: 2000 });
     }
-  };
+  }, [state, toast]);
 
   // run in simulator
-  const runInSimulator = () => {
+  const runInSimulator = useCallback(() => {
     exportCode({ download: false });
     window.dispatchEvent(new Event("runProgramExported"));
     window.dispatchEvent(new Event("switchToRunTab"));
-  };
+  }, [exportCode]);
 
-  // syntax validation
-  const validateSyntax = () => {
+  // syntax validation (unchanged behavior; kept pure, hoisted computations)
+  const validateSyntax = useCallback(() => {
     const errors = [];
 
-    // 1) Unmatched If / End If & For Loop / End For
+    // 1) Unmatched If/End If & For/End For
     let ifCount = 0, forCount = 0;
-    state.blocks.forEach((b, i) => {
+    for (let i = 0; i < state.blocks.length; i++) {
+      const b = state.blocks[i];
       const line = i + 1;
       if (b.type === "If") ifCount++;
       if (b.type === "End If") {
         ifCount--;
-        if (ifCount < 0) {
-          errors.push(`Line ${line}: 'End If' without matching 'If'`);
-          ifCount = 0;
-        }
+        if (ifCount < 0) { errors.push(`Line ${line}: 'End If' without matching 'If'`); ifCount = 0; }
       }
       if (b.type === "For Loop") forCount++;
       if (b.type === "End For") {
         forCount--;
-        if (forCount < 0) {
-          errors.push(`Line ${line}: 'End For' without matching 'For Loop'`);
-          forCount = 0;
-        }
+        if (forCount < 0) { errors.push(`Line ${line}: 'End For' without matching 'For Loop'`); forCount = 0; }
       }
-    });
+    }
     if (ifCount > 0) errors.push(`Unmatched ${ifCount} 'If' without 'End If'`);
     if (forCount > 0) errors.push(`Unmatched ${forCount} 'For Loop' without 'End For'`);
 
@@ -551,14 +469,10 @@ export default function ProgramEditor() {
                 errors.push(`Line ${line}: Move J (joint mode) needs all 6 joint values`);
               }
             } else {
-              if (!b.cartesian) {
-                errors.push(`Line ${line}: Move J (cartesian mode) needs Cartesian coordinates`);
-              }
+              if (!b.cartesian) errors.push(`Line ${line}: Move J (cartesian mode) needs Cartesian coordinates`);
             }
           } else {
-            if (!b.pointVariable) {
-              errors.push(`Line ${line}: Move J (variable mode) needs a RobTarget variable`);
-            }
+            if (!b.pointVariable) errors.push(`Line ${line}: Move J (variable mode) needs a RobTarget variable`);
           }
           break;
         case "If":
@@ -601,121 +515,73 @@ export default function ProgramEditor() {
     if (errors.length) {
       const maxShow = 5;
       const toShow = errors.slice(0, maxShow).join("\n");
-      const more = errors.length > maxShow
-        ? `\nand ${errors.length - maxShow} more errors...`
-        : "";
-      toast({
-        title: "Validation Errors",
-        description: toShow + more,
-        status: "error",
-        isClosable: true,
-        duration: null,       // stay open until dismissed
-      });
+      const more = errors.length > maxShow ? `\nand ${errors.length - maxShow} more errors...` : "";
+      toast({ title: "Validation Errors", description: toShow + more, status: "error", isClosable: true, duration: null });
     } else {
-      toast({
-        title: "Syntax Valid",
-        status: "success",
-      });
+      toast({ title: "Syntax Valid", status: "success" });
     }
-  };
+  }, [state.blocks, toast]);
 
   // undo/redo
-  const handleUndo = () => {
+  const handleUndo = useCallback(() => {
     const prev = undo();
     if (prev) dispatch({ type: "SET_STATE", payload: prev });
-  };
-  const handleRedo = () => {
+  }, [undo]);
+  const handleRedo = useCallback(() => {
     const nxt = redo();
     if (nxt) dispatch({ type: "SET_STATE", payload: nxt });
-  };
+  }, [redo]);
 
-  // drag/drop
-  const onDragEnd = (result) => {
+  // drag/drop — memoize handler to keep children from re-rendering
+  const onDragEnd = useCallback((result) => {
     if (!result.destination) return;
     const { source, destination, draggableId } = result;
-    if (
-      source.droppableId.startsWith("sidebar") &&
-      destination.droppableId === "blocks"
-    ) {
+    if (source.droppableId.startsWith("sidebar") && destination.droppableId === "blocks") {
       const newBlock = { type: draggableId, ...defaultParams[draggableId] };
       const arr = Array.from(state.blocks);
       arr.splice(destination.index, 0, newBlock);
       dispatch({ type: "REORDER_BLOCKS", payload: arr });
       updateHistory({ ...state, blocks: arr });
-    } else if (
-      source.droppableId === "blocks" &&
-      destination.droppableId === "blocks"
-    ) {
+    } else if (source.droppableId === "blocks" && destination.droppableId === "blocks") {
       const arr = Array.from(state.blocks);
       const [moved] = arr.splice(source.index, 1);
       arr.splice(destination.index, 0, moved);
       dispatch({ type: "REORDER_BLOCKS", payload: arr });
       updateHistory({ ...state, blocks: arr });
     }
-  };
+  }, [state, updateHistory]);
+
+  // Memoize derived view for performance when flipping to “View”
+  const groupedView = useMemo(() => groupBlocks(state.blocks), [state.blocks]);
 
   return (
     <DragDropContext onDragEnd={onDragEnd}>
       <Box maxW="1400px" mx="auto" mt={4} position="relative">
         {/* Toolbar */}
         <HStack justify="space-between" mb={6} wrap="wrap" spacing={4}>
-          <Text fontSize="3xl" fontWeight="bold">
-            Graphical Program Editor
-          </Text>
+          <Text fontSize="3xl" fontWeight="bold">Graphical Program Editor</Text>
           <HStack spacing={4}>
-            <Button
-              size="sm"
-              leftIcon={editMode ? <PiEyeBold /> : <PiPencilBold />}
-              onClick={() => setEditMode(!editMode)}
-            >
+            <Button size="sm" leftIcon={editMode ? <PiEyeBold /> : <PiPencilBold />} onClick={() => setEditMode(!editMode)}>
               {editMode ? "View" : "Edit"}
             </Button>
             <ButtonGroup size="sm" isAttached variant="outline">
-              <Button leftIcon={<PiArrowUUpLeft />} onClick={handleUndo}>
-                Undo
-              </Button>
-              <Button leftIcon={<PiArrowUUpRight />} onClick={handleRedo}>
-                Redo
-              </Button>
+              <Button leftIcon={<PiArrowUUpLeft />} onClick={handleUndo}>Undo</Button>
+              <Button leftIcon={<PiArrowUUpRight />} onClick={handleRedo}>Redo</Button>
             </ButtonGroup>
             <ButtonGroup size="sm" isAttached variant="outline">
-              <Button size="sm" colorScheme="purple" onClick={createNewProgram}>
-                New Program
-              </Button>
-              <Button colorScheme="teal" size="sm" onClick={onOpen}>
-                Manage Programs
-              </Button>
-              <Button
-                colorScheme="blue"
-                leftIcon={<PiFloppyDisk />}
-                size="sm"
-                onClick={saveCurrentProgram}
-              >
+              <Button size="sm" colorScheme="purple" onClick={createNewProgram}>New Program</Button>
+              <Button colorScheme="teal" size="sm" onClick={onOpen}>Manage Programs</Button>
+              <Button colorScheme="blue" leftIcon={<PiFloppyDisk />} size="sm" onClick={saveCurrentProgram}>
                 Save locally
               </Button>
-              <Button
-                leftIcon={<PiDownloadSimple />}
-                size="sm"
-                colorScheme="orange"
-                onClick={() => exportCode({ download: true })}
-              >
+              <Button leftIcon={<PiDownloadSimple />} size="sm" colorScheme="orange" onClick={() => exportCode({ download: true })}>
                 Download Code
               </Button>
-              <Button
-                colorScheme="green"
-                leftIcon={<PiPlayCircleFill />}
-                size="sm"
-                onClick={runInSimulator}
-              >
+              <Button colorScheme="green" leftIcon={<PiPlayCircleFill />} size="sm" onClick={runInSimulator}>
                 Run in Simulator
               </Button>
             </ButtonGroup>
-            <Button
-              leftIcon={<PiCheckSquareOffset />}
-              size="sm"
-              w="100px"
-              onClick={validateSyntax}
-            >
+            <Button leftIcon={<PiCheckSquareOffset />} size="sm" w="100px" onClick={validateSyntax}>
               Validate
             </Button>
           </HStack>
@@ -731,7 +597,7 @@ export default function ProgramEditor() {
             {state.variables.length > 0 && (
               <>
                 <Text fontFamily="monospace" color="green.400" mb={2}>
-                // Variable Declarations
+                  // Variable Declarations
                 </Text>
                 {renderVariableDeclarations(state.variables)}
               </>
@@ -742,28 +608,18 @@ export default function ProgramEditor() {
         {/* Blocks Panel */}
         {editMode ? (
           <Box position="relative">
-            <Sidebar
-              expanded={sidebarExpanded}
-              setExpanded={setSidebarExpanded}
-            />
-            <Box
-              ml={sidebarExpanded ? "250px" : "70px"}
-              transition="0.3s ease"
-            >
-              <BlockEditor
-                state={state}
-                dispatch={dispatch}
-                filter={filter}
-              />
+            <Sidebar expanded={sidebarExpanded} setExpanded={setSidebarExpanded} />
+            <Box ml={sidebarExpanded ? "250px" : "70px"} transition="0.3s ease">
+              <BlockEditor state={state} dispatch={dispatch} filter={filter} />
             </Box>
           </Box>
         ) : (
           <Box bg="black" p={4} borderRadius="md">
             <Text fontFamily="monospace" color="green.400" mb={2}>
-            // Main Program
+              // Main Program
             </Text>
             {state.blocks.length > 0 ? (
-              renderGroupedBlocks(groupBlocks(state.blocks))
+              renderGroupedBlocks(groupedView)
             ) : (
               <Text color="gray.500">No blocks added.</Text>
             )}

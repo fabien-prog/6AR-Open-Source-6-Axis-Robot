@@ -30,7 +30,7 @@ This glossary defines **all major technical terms, variable names, file names, a
 | File                      | Description                                                                      |
 | ------------------------- | -------------------------------------------------------------------------------- |
 | `CommManager.cpp`         | Handles serial parsing, JSON decoding, command dispatching, and acknowledgments. |
-| `JointManager.cpp`        | Core stepper control (position, velocity, acceleration).                         |
+| `JointManager.cpp`        | Core stepper control (position, velocity, acceleration, jogging).                |
 | `CalibrationManager.cpp`  | Homing logic per joint, including debounce, limit switch handling.               |
 | `IOManager.cpp`           | Manages digital input/output pins and their debounce states.                     |
 | `SafetyManager.cpp`       | Monitors estop state, soft limits, and halts motion as needed.                   |
@@ -39,20 +39,20 @@ This glossary defines **all major technical terms, variable names, file names, a
 
 ### Classes & Concepts
 
-| Term                       | Description                                                              |
-| -------------------------- | ------------------------------------------------------------------------ |
-| `MoveTo`                   | Command to move a single joint to a position with speed/acceleration.    |
-| `MoveMultiple`             | Command to move multiple joints simultaneously (batch execution).        |
-| `Jog` / `StopJog`          | Real-time incremental movement for manual control.                       |
-| `Home`                     | Command to perform full homing sequence: fast → backoff → slow → offset. |
-| `isHomed[]`                | Per-joint array tracking whether a joint has completed homing.           |
-| `currentPosition[]`        | Step position in degrees (or steps depending on mode).                   |
-| `limitMin[]`, `limitMax[]` | Joint software-enforced travel limits post-homing.                       |
-| `CAL_FAST_FORWARD`         | Homing fast approach speed.                                              |
-| `jogHalfUs`                | Jogging step interval in microseconds.                                   |
-| `LOOKAHEAD_STEPS`          | Max number of steps that can be buffered in the queue.                   |
-| `MOVE_BATCH_INTERVAL_MS`   | Delay between sequential `MoveMultiple` packets.                         |
-| `stepPulse()`              | Function generating step pulses during motion.                           |
+| Term                            | Description                                                                                    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `MoveTo`                        | Command to move a single joint to a position with speed/acceleration.                          |
+| `MoveMultiple`                  | Command to move multiple joints simultaneously (direct or batch).                              |
+| `BeginBatch` / `M` / `EndBatch` | Batch motion execution commands – preloaded trajectory segments.                               |
+| `Jog` / `StopJog`               | Real-time incremental movement for manual control; uses `target` (deg/s) and `accel` (deg/s²). |
+| `Home`                          | Command to perform full homing sequence: fast → backoff → slow → offset.                       |
+| `isHomed[]`                     | Per-joint array tracking whether a joint has completed homing.                                 |
+| `currentPosition[]`             | Step position in degrees.                                                                      |
+| `limitMin[]`, `limitMax[]`      | Joint software-enforced travel limits post-homing.                                             |
+| `CAL_FAST_FORWARD`              | Homing fast approach speed constant.                                                           |
+| `LOOKAHEAD_STEPS`               | Max number of steps that can be buffered in the queue.                                         |
+| `MOVE_BATCH_INTERVAL_MS`        | Delay between sequential `MoveMultiple` packets in batch mode.                                 |
+| `stepPulse()`                   | Function generating step pulses during motion.                                                 |
 
 ---
 
@@ -60,18 +60,19 @@ This glossary defines **all major technical terms, variable names, file names, a
 
 ### Key Files
 
-| File               | Description                                                                 |
-| ------------------ | --------------------------------------------------------------------------- |
-| `server.js`        | Main backend: relays data between frontend, Python IK, and Teensy.          |
-| `ik_service.py`    | Python-based IK solver and linear motion profile generator.                 |
-| `requirements.txt` | Python packages (numpy, scipy, spatialmath-python, roboticstoolbox-python). |
-| `venv/`            | Python virtual environment containing dependencies.                         |
+| File                     | Description                                                                 |
+| ------------------------ | --------------------------------------------------------------------------- |
+| `index.js` / `server.js` | Main backend: relays data between frontend, Python IK, and Teensy.          |
+| `socketHandlers.js`      | Organized Socket.IO event handlers.                                         |
+| `ik_service.py`          | Python-based IK solver and linear motion profile generator.                 |
+| `requirements.txt`       | Python packages (numpy, scipy, spatialmath-python, roboticstoolbox-python). |
+| `venv/`                  | Python virtual environment containing dependencies.                         |
 
 ### Communication
 
 | Interface          | Description                                                 |
 | ------------------ | ----------------------------------------------------------- |
-| `Serial2` (Teensy) | UART interface to Teensy @ `38400` baud (ASCII JSON).       |
+| `Serial2` (Teensy) | UART interface to Teensy @ `921600` baud (ASCII JSON).      |
 | `stdin/stdout`     | Communication with `ik_service.py` via child process pipes. |
 | `Socket.IO`        | Bidirectional channel to the React frontend.                |
 
@@ -79,10 +80,10 @@ This glossary defines **all major technical terms, variable names, file names, a
 
 | Term              | Description                                                               |
 | ----------------- | ------------------------------------------------------------------------- |
-| `tryEnqueue()`    | Pushes a command to the outgoing command buffer (batch or direct).        |
-| `batchQueue[]`    | Queue of pending `MoveMultiple` commands.                                 |
-| `pending[]`       | Tracks sent commands awaiting response.                                   |
-| `CONTROL_DT`      | Time interval (`dt`) between points in a trajectory, e.g., 0.02 sec.      |
+| `writeTeensy()`   | Sends a JSON command to Teensy with an `id` and waits for ACK.            |
+| `batchQueue[]`    | Queue of pending `MoveMultiple` commands for batch execution.             |
+| `pending[]`       | Tracks sent commands awaiting response from Teensy.                       |
+| `CONTROL_DT`      | Time interval (`dt`) between trajectory points, e.g., 0.02 sec.           |
 | `V_TCP`           | Desired linear speed of TCP in m/s.                                       |
 | `ANG_SPEED`       | Desired rotational speed in deg/s for tool orientation transitions.       |
 | `last_q`          | Joint angles of the last valid IK solution – used for seeding future IK.  |
@@ -99,15 +100,16 @@ This glossary defines **all major technical terms, variable names, file names, a
 
 | File              | Description                                                    |
 | ----------------- | -------------------------------------------------------------- |
-| `App.jsx`         | Root component and layout wrapper.                             |
+| `App.js`         | Root component and layout wrapper.                             |
 | `DataContext.js`  | React context managing global state (joint status, IO, estop). |
 | `socket.js`       | Handles all incoming/outgoing `Socket.IO` events.              |
-| `RobotViewer.jsx` | 3D viewer using `Three.js` and `@react-three/fiber`.           |
-| `JogTab.jsx`      | UI for joint jogging.                                          |
-| `MoveAxisTab.jsx` | Multi-joint motion controls (via IK).                          |
-| `SystemTab.jsx`   | Estop, restart, status panel.                                  |
-| `ProgramTab.jsx`  | JS-based program runner UI.                                    |
-| `RunLogsView.jsx` | Live logs, playback preview, and syntax viewer.                |
+| `RobotLoader.js` | 3D viewer using `Three.js` and `@react-three/fiber`.           |
+| `JogTab.js`      | UI for per-joint jogging controls.                             |
+| `MoveAxisTab.js` | Multi-joint motion controls (via IK or manual setpoints).      |
+| `SystemTab.js`   | Estop, restart, system status panel.                           |
+| `ProgramTab.js`  | Block/structured program editor & runner.                      |
+| `RunLogsView.js` | Live logs, playback preview, and syntax viewer.                |
+| `BlockEditor.js` | Drag/drop block programming editor with inline math editing.   |
 
 ### UI Concepts
 
@@ -118,9 +120,9 @@ This glossary defines **all major technical terms, variable names, file names, a
 | `digitalOutputs[]`   | Toggleable outputs in the system UI.                                    |
 | `linearMove`         | Streaming Cartesian move – processed one IK segment at a time.          |
 | `linearMoveToTeensy` | Batched Cartesian move – pre-computed full joint-space motion.          |
-| `programCommands[]`  | A set of structured steps sent as a `.js` program for automation.       |
+| `profileLinear`      | Backend-only preview of batched motion for simulation.                  |
+| `programCommands[]`  | Structured steps sent as `.6ar` programs for automation.                |
 | `toast()`            | Chakra UI method for showing feedback alerts to users.                  |
-| `chakra`             | UI library for layout, controls, and theme.                             |
 | `@react-three/drei`  | Helpers for 3D rendering (lights, controls, grids).                     |
 
 ---
@@ -134,6 +136,10 @@ This glossary defines **all major technical terms, variable names, file names, a
 | `isHomed[]`             | Each joint must be homed before any motion is accepted.                                        |
 | `limitMin` / `limitMax` | Software-defined limits enforced after homing.                                                 |
 | `debounceMillis`        | Time filter applied to input transitions to avoid false triggers.                              |
+| `BatchExecStart`        | Event indicating Teensy began executing a preloaded batch.                                     |
+| `SegmentLoaded`         | Event confirming a batch segment was accepted.                                                 |
+| `BatchComplete`         | Event when a batch finishes successfully.                                                      |
+| `BatchAborted`          | Event when a batch is stopped mid-execution.                                                   |
 | `status: "ok"`          | JSON response status confirming success.                                                       |
 | `status: "error"`       | JSON error from Teensy, backend, or solver (includes description).                             |
 
@@ -141,12 +147,14 @@ This glossary defines **all major technical terms, variable names, file names, a
 
 ## Protocols & JSON Structures
 
-| Structure              | Example                                                                                          |
-| ---------------------- | ------------------------------------------------------------------------------------------------ |
-| `MoveTo` Command       | `{ "cmd": "MoveTo", "joint": 4, "target": 90, "speed": 50, "accel": 10 }`                        |
-| `MoveMultiple` Command | `{ "cmd": "MoveMultiple", "joints": [1,2], "targets": [...], "speeds": [...], "accels": [...] }` |
-| `Home` Command         | `{ "cmd": "Home", "joint": 6, "speedFast": 50, "speedSlow": 3 }`                                 |
-| `IK Result`            | `{ "initial": [...], "final": [...], "dt": 0.02, "speeds": [...], "accels": [...] }`             |
-| `jointStatusAll`       | `{ "cmd": "jointStatusAll", "data": [{ joint: 1, position: ..., velocity: ... }] }`              |
+| Structure               | Example                                                                                                           |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `MoveTo` Command        | `{ "cmd": "MoveTo", "joint": 4, "target": 90, "speed": 50, "accel": 10 }`                                         |
+| `MoveMultiple` Command  | `{ "cmd": "MoveMultiple", "joints": [1,2], "targets": [...], "speeds": [...], "accels": [...] }`                  |
+| `BeginBatch` + Segments | `{ "cmd": "BeginBatch" }` → `{ "cmd": "M", "joints": [...], "targets": [...], "speeds": [...], "accels": [...] }` |
+| `Home` Command          | `{ "cmd": "Home", "joint": 6, "speedFast": 50, "speedSlow": 3 }`                                                  |
+| `Jog` Command           | `{ "cmd": "Jog", "joint": 2, "target": 15, "accel": 20 }`                                                         |
+| `IK Result`             | `{ "initial": [...], "final": [...], "dt": 0.02, "speeds": [...], "accels": [...] }`                              |
+| `jointStatusAll` Event  | `{ "cmd": "jointStatusAll", "data": [{ "joint": 1, "position": ..., "velocity": ..., "target": ... }] }`          |
 
 ---

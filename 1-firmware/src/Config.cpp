@@ -24,9 +24,6 @@ const JointConfig JOINT_CONFIG[CONFIG_JOINT_COUNT] = {
         STEPPER_PULSE_PINS[0], // 12) pulsePin
         STEPPER_DIR_PINS[0],   // 13) dirPin
         0,                     // 14) unused (pad)
-        10.0f,                 // 15) Kp (deg/s output)
-        0.0f,                  // 16) Ki (deg/s output)
-        0.1f,                  // 17) Kd (deg/s output)
         25.0f,                 // 18) maxJointSpeed (deg/s)
         3.3333f                // 19) positionFactor
     },
@@ -36,7 +33,7 @@ const JointConfig JOINT_CONFIG[CONFIG_JOINT_COUNT] = {
         "J2",                         //  1) name
         4000.0f,                      //  2) maxMotorSpeed
         75.0f / 24.0f * 5.0f * 27.0f, //  3) gearboxRatio
-        400,                         //  4) stepsPerRev
+        400,                          //  4) stepsPerRev
         25.0f,                        //  5) maxAcceleration
         5.0f,                         //  6) homingSpeed
         2.0f,                         //  7) slowHomingSpeed
@@ -44,12 +41,9 @@ const JointConfig JOINT_CONFIG[CONFIG_JOINT_COUNT] = {
         170.0f,                       //  9) jointMax
         10.0f,                        // 10) homeOffset
         false,                        // 11) isReversed
-        STEPPER_PULSE_PINS[2],        // 12) pulsePin
-        STEPPER_DIR_PINS[2],          // 13) dirPin
+        STEPPER_PULSE_PINS[1],        // 12) pulsePin
+        STEPPER_DIR_PINS[1],          // 13) dirPin
         0,                            // 14) unused (pad)
-        10.0f,                        // 15) Kp (deg/s output)
-        0.0f,                         // 16) Ki (deg/s output)
-        0.1f,                         // 17) Kd (deg/s output)
         60.0f,                        // 18) maxJointSpeed (deg/s)
         0.8333f                       // 19) positionFactor
     },
@@ -59,20 +53,17 @@ const JointConfig JOINT_CONFIG[CONFIG_JOINT_COUNT] = {
         "J3",                         //  1) name
         4000.0f,                      //  2) maxMotorSpeed
         75.0f / 24.0f * 5.0f * 27.0f, //  3) gearboxRatio
-        400,                         //  4) stepsPerRev
+        400,                          //  4) stepsPerRev
         150.0f,                       //  5) maxAcceleration
-        10.0f,                         //  6) homingSpeed
+        10.0f,                        //  6) homingSpeed
         2.0f,                         //  7) slowHomingSpeed
         0.0f,                         //  8) jointMin
         250.0f,                       //  9) jointMax
         29.5f,                        // 10) homeOffset
-        true,                        // 11) isReversed
-        STEPPER_PULSE_PINS[1],        // 12) pulsePin
-        STEPPER_DIR_PINS[1],          // 13) dirPin
+        true,                         // 11) isReversed
+        STEPPER_PULSE_PINS[2],        // 12) pulsePin
+        STEPPER_DIR_PINS[2],          // 13) dirPin
         0,                            // 14) unused (pad)
-        10.0f,                        // 15) Kp (deg/s output)
-        0.0f,                         // 16) Ki (deg/s output)
-        0.1f,                         // 17) Kd (deg/s output)
         80.0f,                        // 18) maxJointSpeed (deg/s)
         0.8804f                       // 19) positionFactor
     },
@@ -88,13 +79,10 @@ const JointConfig JOINT_CONFIG[CONFIG_JOINT_COUNT] = {
         0.0f,                  //  8) jointMin
         350.0f,                //  9) jointMax -0.4
         213.5f,                // 10) homeOffset
-        true,                 // 11) isReversed
+        true,                  // 11) isReversed
         STEPPER_PULSE_PINS[3], // 12) pulsePin
         STEPPER_DIR_PINS[3],   // 13) dirPin
         0,                     // 14) unused (pad)
-        10.0f,                 // 15) Kp (deg/s output)
-        0.0f,                  // 16) Ki (deg/s output)
-        0.1f,                  // 17) Kd (deg/s output)
         150.0f,                // 18) maxJointSpeed (deg/s)
         1.0f                   // 19) positionFactor
 
@@ -109,15 +97,12 @@ const JointConfig JOINT_CONFIG[CONFIG_JOINT_COUNT] = {
         20.0f,                 //  6) homingSpeed
         3.0f,                  //  7) slowHomingSpeed
         0.0f,                  //  8) jointMin
-        210.0f,                //  9) jointMax
-        105.0f,                // 10) homeOffset
-        false,                  // 11) isReversed
+        240.0f,                //  9) jointMax
+        120.0f,                // 10) homeOffset
+        false,                 // 11) isReversed
         STEPPER_PULSE_PINS[4], // 12) pulsePin
         STEPPER_DIR_PINS[4],   // 13) dirPin
         0,                     // 14) unused (pad)
-        10.0f,                 // 15) Kp (deg/s output)
-        0.0f,                  // 16) Ki (deg/s output)
-        0.1f,                  // 17) Kd (deg/s output)
         250.0f,                // 18) maxJointSpeed (deg/s)
         0.8411f                // 19) positionFactor
     },
@@ -133,13 +118,10 @@ const JointConfig JOINT_CONFIG[CONFIG_JOINT_COUNT] = {
         0.0f,                  //  8) jointMin
         345.0f,                //  9) jointMax
         147.0f,                // 10) homeOffset
-        false,                  // 11) isReversed
+        false,                 // 11) isReversed
         STEPPER_PULSE_PINS[5], // 12) pulsePin
         STEPPER_DIR_PINS[5],   // 13) dirPin
         0,                     // 14) unused (pad)
-        50.0f,                 // 15) Kp (deg/s output)
-        0.0f,                  // 16) Ki (deg/s output)
-        0.1f,                  // 17) Kd (deg/s output)
         700.0f,                // 18) maxJointSpeed (deg/s)
         1.0f                   // 19) positionFactor
     }};

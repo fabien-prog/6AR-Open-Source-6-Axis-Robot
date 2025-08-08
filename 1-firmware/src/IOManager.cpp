@@ -54,11 +54,13 @@ void IOManager::begin()
 void IOManager::update()
 {
     uint32_t now = micros();
+    // Debounce all inputs…
     for (size_t i = 0; i < INPUT_COUNT; ++i)
     {
         readDigital(i, now);
-        isReady(); // update green LED state
     }
+    // …then update the “ready” LED exactly once
+    isReady();
 }
 
 void IOManager::readDigital(size_t i, uint32_t now)

@@ -1,4 +1,3 @@
-// src/components/Program Editor/VariableEditor.js
 import React, { useCallback } from "react";
 import {
   Box,
@@ -13,7 +12,9 @@ import {
   useColorModeValue,
 } from "@chakra-ui/react";
 import { FiTrash2, FiPlus, FiChevronUp, FiChevronDown } from "react-icons/fi";
-import { useData } from "../Main/DataContext";
+// Remove joints from DataContext; we’ll use the store instead
+// import { useData } from "../Main/DataContext";
+import { useJointStore } from "../utils/store";
 
 // Available variable categories.
 const variableCategories = [
@@ -36,7 +37,8 @@ const rowBgDark = {
 };
 
 export default function VariableEditor({ variables, dispatch }) {
-  const { joints } = useData();
+  // const { joints } = useData(); // ← not used anymore
+  const storeAngles = useJointStore((s) => s.angles); // ← virtual/sim angles (deg)
 
   // page‐wide colors
   const bg = useColorModeValue("white", "gray.800");
@@ -63,10 +65,12 @@ export default function VariableEditor({ variables, dispatch }) {
       dispatch({ type: "UPDATE_VARIABLE", index, payload: { [field]: value } }),
     [dispatch]
   );
+
   const removeVariable = useCallback(
     (index) => dispatch({ type: "REMOVE_VARIABLE", index }),
     [dispatch]
   );
+
   const moveVariable = useCallback(
     (from, to) => {
       if (to < 0 || to >= variables.length) return;
@@ -77,15 +81,23 @@ export default function VariableEditor({ variables, dispatch }) {
     },
     [variables, dispatch]
   );
+
+  // TEACH now reads from the global store (virtual) instead of the physical robot
   const teachVariable = useCallback(
     (index) => {
       const v = variables[index];
-      const jointsArr =
-        Array.isArray(joints) && joints.length === 6
-          ? joints
-          : [0, 0, 0, 0, 0, 0];
+
+      // Only “Work Object” and “Robot Target” are teachable (as before)
       if (v.type === "Work Object" || v.type === "Robot Target") {
-        const fmt = jointsArr.map((j) => +j.toFixed(3)).join(",");
+        // Always take the virtual angles from the store (deg)
+        const jointsArr =
+          Array.isArray(storeAngles) && storeAngles.length === 6
+            ? storeAngles
+            : [0, 0, 0, 0, 0, 0];
+
+        // Format like "(j1,j2,...,j6)" with 3 decimals
+        const fmt = jointsArr.map((j) => +Number(j).toFixed(3)).join(",");
+
         dispatch({
           type: "UPDATE_VARIABLE",
           index,
@@ -93,7 +105,7 @@ export default function VariableEditor({ variables, dispatch }) {
         });
       }
     },
-    [variables, joints, dispatch]
+    [variables, storeAngles, dispatch]
   );
 
   return (
@@ -142,7 +154,6 @@ export default function VariableEditor({ variables, dispatch }) {
 
         {/* Each variable row */}
         {variables.map((variable, i) => {
-          // pick correct bg for light/dark
           const rowBg = rowBgDark[variable.type];
 
           return (
@@ -195,9 +206,7 @@ export default function VariableEditor({ variables, dispatch }) {
                 size="sm"
                 w="100%"
                 value={variable.dataType}
-                onChange={(e) =>
-                  updateVariable(i, "dataType", e.target.value)
-                }
+                onChange={(e) => updateVariable(i, "dataType", e.target.value)}
               >
                 {dataTypes.map((dt) => (
                   <option key={dt} value={dt}>
@@ -254,7 +263,7 @@ export default function VariableEditor({ variables, dispatch }) {
                   />
                 </Tooltip>
                 {["Work Object", "Robot Target"].includes(variable.type) && (
-                  <Tooltip label="Teach position">
+                  <Tooltip label="Teach position (from virtual joints)">
                     <Button
                       size="sm"
                       colorScheme="primary"
