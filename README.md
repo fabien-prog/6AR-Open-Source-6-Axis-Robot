@@ -10,6 +10,10 @@ The goal: a robot that _feels_ and _behaves_ like a professional manipulator, bu
 
 ---
 
+## LIVE UI DEMO
+
+[Live Ui Demo](https://6ar.fabinnov.ca/)
+
 ## 🎯 Vision & Motivation
 
 The **6AR** is meant to **mimic the experience of using a professional 6-axis industrial robot**, while staying:
