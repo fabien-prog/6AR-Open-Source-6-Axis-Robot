@@ -140,6 +140,23 @@ Issues, PRs, and collaboration welcome.
 
 ---
 
+## 🌍 Social Media & Community
+
+Stay connected, share your build, and join the growing **6AR Robotics** community:
+
+| Platform         | Link                                                                                          |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| 💬 **Discord**   | [Join our Discord Server](https://discord.gg/hdVzqNKb)                                        |
+| ▶️ **YouTube**   | [6AR Robotics on YouTube](https://www.youtube.com/@6ARRobotics)                               |
+| 👽 **Reddit**    | [r/6AR\_Robotics](https://www.reddit.com/r/6AR_Robotics/)                                     |
+| 💻 **GitHub**    | [6AR – Open Source 6-Axis Robot](https://github.com/fabien-prog/6AR-Open-Source-6-Axis-Robot) |
+| 📘 **Facebook**  | [6AR Robotics on Facebook](https://www.facebook.com/profile.php?id=61579199611376)            |
+| 🎵 **TikTok**    | [6AR Robotics on TikTok](https://www.tiktok.com/@6ar_robotics)                                |
+| 📸 **Instagram** | [@6ar\_robotics](https://www.instagram.com/6ar_robotics)                                      |
+
+---
+
+
 ## 📜 License
 
 MIT — free to use, modify, and distribute.
