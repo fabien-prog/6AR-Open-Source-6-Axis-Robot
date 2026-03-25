@@ -36,6 +36,6 @@ initSocketService(
   uartService.TIMEOUTS
 );
 
-server.listen(5000, '0.0.0.0', () => {
-  console.log('[Server] Listening on 0.0.0.0:5000');
+server.listen(5001, '0.0.0.0', () => {
+  console.log('[Server] Listening on 0.0.0.0:5001');
 });

@@ -210,7 +210,7 @@ Stephen Brawner (brawner@gmail.com)
     <child
       link="link_3" />
     <axis
-      xyz="0 1 0" />
+      xyz="0 -1 0" />
     <limit lower="-2.1817"
       upper="2.1817"
       effort="0"
@@ -325,7 +325,7 @@ Stephen Brawner (brawner@gmail.com)
     <child
       link="link_5" />
     <axis
-      xyz="0 0 -1" />
+      xyz="0 0 1" />
     <limit
       lower="-2.0944"
       upper="2.0944"
