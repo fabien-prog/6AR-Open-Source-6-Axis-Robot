@@ -37,8 +37,19 @@ export function generateCode(state: { variables: Array<any>; blocks: Array<any> 
 
     switch (b.type) {
       case "Move L": {
-        const target = src === "manual" ? b.cartesian : b.pointVariable;
-        emit(`MoveL Cartesian ${target} Speed ${b.speed};`);
+        if (src === "manual") {
+          const x = b.x ?? "0";
+          const y = b.y ?? "0";
+          const z = b.z ?? "0";
+          const a = b.a ?? "0";
+          const bv = b.b ?? "0";
+          const c = b.c ?? "0";
+          const angSpeed = b.angular_speed_deg ?? "45";
+          const accel = b.accel ?? "0.1";
+          emit(`MoveL Cartesian [${x},${y},${z},${a},${bv},${c}] Speed ${b.speed} AngSpeed ${angSpeed} Accel ${accel};`);
+        } else {
+          emit(`MoveL Cartesian ${b.pointVariable} Speed ${b.speed};`);
+        }
         break;
       }
 

@@ -1,73 +1,131 @@
-# React + TypeScript + Vite
+# 6AR Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19 + TypeScript + Vite control interface for the 6AR robot.
 
-Currently, two official plugins are available:
+The app is the operator UI for simulation, physical robot control, program editing, run logs, settings, IO, FK/IK requests, and live 3D visualization.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Stack
 
-## React Compiler
+- React 19, TypeScript, Vite 7
+- Tailwind CSS 4 via `@tailwindcss/vite`
+- shadcn-style UI components built on Radix UI
+- Socket.IO client for the Pi bridge
+- TanStack Query for cached robot status and telemetry
+- Zustand for joint/viewer state
+- Three.js, `@react-three/fiber`, `@react-three/drei`, `urdf-loader`
+- `@hello-pangea/dnd` for block programming drag and drop
+- Sonner for toasts
 
-The React Compiler is currently not compatible with SWC. See [this issue](https://github.com/vitejs/vite-plugin-react/issues/428) for tracking the progress.
+## Run Locally
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Vite prints the local URL, normally `http://localhost:5173`.
+
+By default the UI connects to:
+
+```text
+http://192.168.0.55:5001
+```
+
+Override the bridge URL with either:
+
+```bash
+VITE_SOCKET_URL=http://localhost:5001 npm run dev
+```
+
+or in the browser console:
 
 ```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+localStorage.setItem("6ar.socketUrl", "http://localhost:5001")
+```
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Scripts
+
+```bash
+npm run dev       # start Vite dev server
+npm run build     # type-check and build production assets
+npm run lint      # run ESLint
+npm run preview   # preview the production build
+```
+
+## Source Layout
+
+```text
+src/
+├── components/        # shared UI, modals, theme, background
+├── contexts/          # Socket provider and robot data providers
+├── features/
+│   ├── App/           # main shell and tab navigation
+│   ├── Program/       # block editor, code generator, variables, math editor
+│   ├── Robot/         # robot studio, sim/physical cards, STL support
+│   ├── Runner/        # program manager and run logs
+│   └── Settings/      # settings drawer and parameter UI
+├── hooks/             # Socket.IO + TanStack Query data hooks
+├── lib/               # 6AR runner and motion helpers
+├── stores/            # Zustand stores
+└── utils/             # syntax highlighting helpers
+```
+
+## Runtime Shape
+
+`main.tsx` wraps the app with:
+
+- `QueryClientProvider`
+- theme provider
+- `SocketProvider`
+- `RobotDataProviders`
+- `Toaster`
+
+`SocketProvider` owns the Socket.IO client and connection state. The robot providers split live data into status, kinematics, IO, logs, and commands so feature components can subscribe only to what they need.
+
+## Main UI
+
+The first screen is the control workspace, not a landing page:
+
+- `Robot` tab: simulation, physical robot controls, pose editor, linear motion, 3D robot studio
+- `Program` tab: block programming and generated `.6ar`-style code
+- `Run` tab: run logs and program execution state
+- settings drawer: robot parameters and configuration controls
+- header badges: bridge connection, system status, uptime
+- E-stop button: sends `StopAll`
+
+## Bridge Events
+
+The UI sends raw firmware commands through the Pi bridge with:
+
+```ts
+socket.emit("cmd", { cmd: "GetJointStatus" })
+```
+
+It also uses higher-level bridge events:
+
+- `ik_request`
+- `fk_request`
+- `profileLinear`
+- `linearMove`
+- `profileMoveToTeensy`
+
+Important incoming events include:
+
+- `jointStatusAll`, `jointStatus`
+- `inputStatus`, `outputStatus`
+- `systemStatus`, `parameters`, `homed`
+- `ik_response`, `ik_error`
+- `fk_response`, `fk_error`
+- `profileLinear_response`, `profileLinear_error`
+- `linearMoveStarted`, `linearMoveComplete`, `linearMove_error`
+- `BatchExecStart`, `SegmentLoaded`, `BatchComplete`, `BatchAborted`
+
+## Production Build for Pi Bridge
+
+The bridge serves static assets from `2-pi-bridge/public`.
+
+```bash
+npm run build
+mkdir -p ../2-pi-bridge/public
+cp -r dist/* ../2-pi-bridge/public/
 ```

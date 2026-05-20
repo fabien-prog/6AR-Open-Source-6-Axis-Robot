@@ -6,10 +6,12 @@ export type Run6arEvent = { type: "log"; message: string; line: number } | { typ
 type Vars = Record<string, number>;
 type Coords = Record<string, Vec6>;
 
+type CartesianTarget = { x: number; y: number; z: number; a: number; b: number; c: number };
+
 type Stmt =
   | { t: "LOG"; msg: string; line: number }
   | { t: "Home"; line: number }
-  | { t: "MoveL"; mode: "Cartesian"; target: string; speed: number; line: number }
+  | { t: "MoveL"; mode: "Cartesian"; target: string; cartesian?: CartesianTarget; speed: number; angSpeed: number; accel: number; line: number }
   | { t: "MoveJ"; mode: "Cartesian" | "Joint"; target: string; speed: number; line: number }
   | { t: "If"; var: string; value: number; body: Stmt[]; line: number }
   | { t: "For"; counter: string; start: number; endToken: string; step: number; body: Stmt[]; line: number }
@@ -83,13 +85,31 @@ export function* run6ar(code: string): Generator<Run6arEvent, void, unknown> {
           continue;
         }
 
-        // MoveL Cartesian TARGET Speed N
+        // MoveL inline: MoveL Cartesian [x,y,z,a,b,c] Speed N AngSpeed M Accel K;
+        if ((m = l.match(/^MoveL Cartesian \[([^\]]+)\] Speed ([\d.eE+\-]+) AngSpeed ([\d.eE+\-]+) Accel ([\d.eE+\-]+);$/))) {
+          const parts = m[1].split(",").map(Number);
+          stmts.push({
+            t: "MoveL",
+            mode: "Cartesian",
+            target: "",
+            cartesian: { x: parts[0], y: parts[1], z: parts[2], a: parts[3], b: parts[4], c: parts[5] },
+            speed: +m[2],
+            angSpeed: +m[3],
+            accel: +m[4],
+            line: lineIndex,
+          });
+          continue;
+        }
+
+        // MoveL variable: MoveL Cartesian TARGET Speed N
         if ((m = l.match(/^MoveL Cartesian (\w+) Speed (\d+);$/))) {
           stmts.push({
             t: "MoveL",
             mode: "Cartesian",
             target: m[1],
             speed: +m[2],
+            angSpeed: 45,
+            accel: 0.1,
             line: lineIndex,
           });
           continue;
@@ -181,20 +201,50 @@ export function* run6ar(code: string): Generator<Run6arEvent, void, unknown> {
           yield { type: "cmd", payload: { cmd: "Home", id: nextCmdId++ }, line: s.line };
           break;
 
-        case "MoveL":
-          yield { type: "log", message: `MoveL (${s.mode}) → ${s.target} @${s.speed}`, line: s.line };
-          yield {
-            type: "cmd",
-            payload: {
-              cmd: "MoveL",
-              id: nextCmdId++,
-              mode: s.mode,
-              target: ctx.coords[s.target] || { name: s.target },
-              speed: s.speed,
-            },
-            line: s.line,
-          };
+        case "MoveL": {
+          if (s.cartesian) {
+            const { x, y, z, a, b, c } = s.cartesian;
+            yield { type: "log", message: `MoveL → [${x}, ${y}, ${z}] A=${a} B=${b} C=${c} @${s.speed}mm/s`, line: s.line };
+            yield {
+              type: "cmd",
+              payload: {
+                cmd: "MoveL",
+                id: nextCmdId++,
+                position: [x, y, z],
+                eulerDeg: [a, b, c],
+                speed: s.speed,
+                angSpeed: s.angSpeed,
+                accel: s.accel,
+              },
+              line: s.line,
+            };
+          } else {
+            const coord = ctx.coords[s.target];
+            yield { type: "log", message: `MoveL (${s.mode}) → ${s.target} @${s.speed}`, line: s.line };
+            if (coord) {
+              yield {
+                type: "cmd",
+                payload: {
+                  cmd: "MoveL",
+                  id: nextCmdId++,
+                  position: [coord.x, coord.y, coord.z],
+                  eulerDeg: [coord.rx, coord.ry, coord.rz],
+                  speed: s.speed,
+                  angSpeed: s.angSpeed,
+                  accel: s.accel,
+                },
+                line: s.line,
+              };
+            } else {
+              yield {
+                type: "cmd",
+                payload: { cmd: "MoveL", id: nextCmdId++, mode: s.mode, target: { name: s.target }, speed: s.speed },
+                line: s.line,
+              };
+            }
+          }
           break;
+        }
 
         case "MoveJ":
           yield { type: "log", message: `MoveJ (${s.mode}) → ${s.target} @${s.speed}`, line: s.line };

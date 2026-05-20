@@ -40,12 +40,18 @@ type ProgramEntry = { id: number; name: string; state: ProgramState };
 const defaultParams: Record<string, any> = {
   "Move L": {
     src: "manual",
-    joints: ["", "", "", "", "", ""],
-    cartesian: "",
+    x: "0.0",
+    y: "0.0",
+    z: "0.5",
+    a: "0.0",
+    b: "180.0",
+    c: "0.0",
+    speed: "50",
+    angular_speed_deg: "45",
+    accel: "0.1",
     referenceType: "World",
     referenceObject: "",
-    speed: "100",
-    zone: "Fine",
+    pointVariable: "",
   },
   "Move J": {
     src: "manual",
@@ -431,10 +437,22 @@ export default function ProgramEditor() {
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [filter] = useState("");
 
-  // sync editor state to currentProgram
+  // sync editor state to currentProgram when switching programs
   useEffect(() => {
     dispatch({ type: "SET_STATE", payload: currentProgram.state || initialState });
   }, [currentProgram]);
+
+  // auto-save: persist state to localStorage 500ms after any change
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setPrograms((prev) => {
+        const next = prev.map((p) => (p.id === currentProgram.id ? { ...p, state } : p));
+        saveEditorList(next);
+        return next;
+      });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [state, currentProgram.id]);
 
   // handle load from drawer (custom event)
   const onLoadEditor = useCallback((e: Event) => {
@@ -549,7 +567,11 @@ export default function ProgramEditor() {
 
       switch (b.type) {
         case "Move L":
-          if (!b.cartesian) errors.push(`Line ${line}: Move L requires Cartesian coordinates`);
+          if ((b.src || "manual") === "manual") {
+            if (!b.x && !b.y && !b.z) errors.push(`Line ${line}: Move L requires X, Y, Z coordinates`);
+          } else {
+            if (!b.pointVariable) errors.push(`Line ${line}: Move L (variable mode) needs a RobTarget variable`);
+          }
           break;
 
         case "Move J":

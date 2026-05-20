@@ -4,7 +4,7 @@ import { PiSlidersHorizontalBold, PiWarningCircleBold } from "react-icons/pi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -97,33 +97,25 @@ const { systemStatus, elapsedTime, connected } = useRobotStatus();
         </div>
       </header>
 
-      {/* Main */}
+      {/* Main — all tabs stay mounted, CSS hides inactive ones */}
       <main className="flex-1 min-h-0 overflow-hidden">
-        <Tabs value={view} onValueChange={handleViewChange} className="h-full min-h-0 w-full">
-          <TabsContent value="robot" className="m-0 h-full min-h-0 w-full overflow-hidden">
-            <div className="h-full w-full min-h-0 overflow-hidden">
-              <RobotStudioTab />
-            </div>
-          </TabsContent>
-          <TabsContent value="program" className="m-0 h-full min-h-0 w-full overflow-hidden">
-            {mounted.program && (
-              <div className="h-full w-full min-h-0 overflow-hidden">
-                <ScrollArea className="h-full min-h-0">
-                  <div className="p-4">
-                    <ProgramEditor />
-                  </div>
-                </ScrollArea>
+        <div className={`h-full w-full min-h-0 overflow-hidden ${view === "robot" ? "" : "hidden"}`}>
+          <RobotStudioTab />
+        </div>
+
+        <div className={`h-full w-full min-h-0 overflow-hidden ${view === "program" ? "" : "hidden"}`}>
+          {mounted.program && (
+            <ScrollArea className="h-full min-h-0">
+              <div className="p-4">
+                <ProgramEditor />
               </div>
-            )}
-          </TabsContent>
-          <TabsContent value="run" className="m-0 h-full min-h-0 w-full overflow-hidden">
-            {mounted.run && (
-              <div className="h-full w-full min-h-0 overflow-hidden">
-                <RunLogsView />
-              </div>
-            )}
-          </TabsContent>
-        </Tabs>
+            </ScrollArea>
+          )}
+        </div>
+
+        <div className={`h-full w-full min-h-0 overflow-hidden ${view === "run" ? "" : "hidden"}`}>
+          {mounted.run && <RunLogsView />}
+        </div>
       </main>
     </div>
   );

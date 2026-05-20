@@ -21,6 +21,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useRobotCommands, useRobotIO } from "@/contexts/robot";
+import { useSocket } from "@/contexts/SocketContext";
 
 type ProgramItem = { id: number; name: string; code: string };
 
@@ -124,12 +125,29 @@ const solveVForTime = (d: number, T: number, vCap: number, aCap: number) => {
 // If Teensy speeds/accels are in motor units, set true
 const APPLY_POSITION_FACTOR_TO_PROFILE = false;
 
+// XYZ Euler (degrees) → quaternion [x, y, z, w]
+function eulerXYZDegToQuat(aDeg: number, bDeg: number, cDeg: number): [number, number, number, number] {
+  const ax = (aDeg * Math.PI) / 180;
+  const ay = (bDeg * Math.PI) / 180;
+  const az = (cDeg * Math.PI) / 180;
+  const cx = Math.cos(ax / 2), sx = Math.sin(ax / 2);
+  const cy = Math.cos(ay / 2), sy = Math.sin(ay / 2);
+  const cz = Math.cos(az / 2), sz = Math.sin(az / 2);
+  return [
+    sx * cy * cz + cx * sy * sz,
+    cx * sy * cz - sx * cy * sz,
+    cx * cy * sz + sx * sy * cz,
+    cx * cy * cz - sx * sy * sz,
+  ];
+}
+
 export default function RunLogsView() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const { parameters, digitalInputs } = useRobotIO();
-  const { getAllJointStatus, moveMultiple, output, getInputs } = useRobotCommands();
+  const { getAllJointStatus, moveMultiple, linearMove, output, getInputs } = useRobotCommands();
+  const { socket } = useSocket();
 
   // Programs
   const [programs, setPrograms] = useState<ProgramItem[]>(() => {
@@ -339,6 +357,38 @@ export default function RunLogsView() {
         return { done: false as const, value: entry };
       }
 
+      if (cmd === "MoveL" && Array.isArray(value.payload.position)) {
+        setRunning(false);
+        const { position, eulerDeg, speed: speedMms, angSpeed, accel } = value.payload as any;
+
+        const proceed = async () => {
+          const status = await getAllJointStatus();
+          const seed = Array.isArray(status) && status.length === 6
+            ? status.map((s: any) => s?.position ?? 0)
+            : [0, 0, 0, 0, 0, 0];
+
+          const quaternion = eulerXYZDegToQuat(eulerDeg[0], eulerDeg[1], eulerDeg[2]);
+          const speedMs = (speedMms as number) / 1000;
+
+          const onComplete = () => {
+            socket?.off("linearMove_error", onError);
+            setRunning(true);
+          };
+          const onError = () => {
+            socket?.off("linearMoveComplete", onComplete);
+            toast.error("Linear move failed");
+            setRunning(true);
+          };
+          socket?.once("linearMoveComplete", onComplete);
+          socket?.once("linearMove_error", onError);
+
+          linearMove({ position, quaternion, speed: speedMs, angular_speed_deg: angSpeed, accel, seed });
+        };
+
+        void proceed();
+        return { done: false as const, value: entry };
+      }
+
       if (cmd === "SetDO") {
         const { pin, state } = value.payload as any;
         output([pin], [state]);
@@ -363,7 +413,7 @@ export default function RunLogsView() {
     }
 
     return { done: false as const, value: entry };
-  }, [bufferedAppendLog, codeLines, digitalInputs, getAllJointStatus, getInputs, moveMultiple, parameters, output]);
+  }, [bufferedAppendLog, codeLines, digitalInputs, getAllJointStatus, getInputs, moveMultiple, linearMove, socket, parameters, output]);
 
   // runLoop scheduler
   useEffect(() => {

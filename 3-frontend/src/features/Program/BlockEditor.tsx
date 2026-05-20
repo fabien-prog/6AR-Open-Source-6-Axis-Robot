@@ -46,13 +46,32 @@ function computeIndentLevels(blocks: any[]) {
 
 function renderSummary(block: any, variables: any[] = []) {
   switch (block.type) {
-    case "Move L":
+    case "Move L": {
+      const src = block.src || "manual";
+      const pt = src === "manual"
+        ? `[${block.x ?? 0}, ${block.y ?? 0}, ${block.z ?? 0}]`
+        : block.pointVariable || "—";
+      return (
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge className="gap-2 px-3 py-1">
+            <PiTarget className="h-4 w-4" /> {pt}
+          </Badge>
+          <Badge variant="secondary" className="gap-2 px-3 py-1">
+            <PiSpeedometer className="h-4 w-4" /> {block.speed} mm/s
+          </Badge>
+          <Badge variant="secondary" className="gap-2 px-3 py-1">
+            <PiMapPinAreaBold className="h-4 w-4" /> {block.referenceType === "WObj" ? block.referenceObject || "–" : "World"}
+          </Badge>
+        </div>
+      );
+    }
+
     case "Move J": {
       const src = block.src || "manual";
       let pt: string;
 
       if (src === "manual") {
-        if (block.type === "Move J" && block.moveMode === "joint") {
+        if (block.moveMode === "joint") {
           pt = `[${(block.joints || []).join(",")}]`;
         } else {
           pt = block.cartesian || "—";
@@ -63,18 +82,16 @@ function renderSummary(block: any, variables: any[] = []) {
 
       return (
         <div className="flex flex-wrap items-center gap-2">
-          {block.type === "Move J" && (
-            <Badge variant="secondary" className="gap-2 px-3 py-1">
-              {block.moveMode === "joint" ? "Joint" : "Cartesian"}
-            </Badge>
-          )}
+          <Badge variant="secondary" className="gap-2 px-3 py-1">
+            {block.moveMode === "joint" ? "Joint" : "Cartesian"}
+          </Badge>
 
           <Badge className="gap-2 px-3 py-1">
             <PiTarget className="h-4 w-4" /> {pt}
           </Badge>
 
           <Badge variant="secondary" className="gap-2 px-3 py-1">
-            <PiSpeedometer className="h-4 w-4" /> {block.speed} {block.type === "Move L" ? "mm/s" : "°/s"}
+            <PiSpeedometer className="h-4 w-4" /> {block.speed} °/s
           </Badge>
 
           <Badge variant="secondary" className="gap-2 px-3 py-1">
@@ -252,21 +269,83 @@ const { digitalInputs, digitalOutputs } = useRobotIO();
 
   const renderBlockParams = useCallback(
     (block: any, index: number) => {
+      if (!block) return null;
       switch (block.type) {
-        case "Move L":
-        case "Move J": {
-          const isMoveL = block.type === "Move L";
+        case "Move L": {
           const src = block.src || "manual";
-
           return (
             <div className="space-y-2">
-              {/* Source */}
               <div className="flex items-center gap-2">
                 <div className="w-[100px] text-xs text-muted-foreground">Source:</div>
                 <Select value={src} onValueChange={(v) => updateBlock(index, "src", v)}>
-                  <SelectTrigger className="h-8">
-                    <SelectValue />
-                  </SelectTrigger>
+                  <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manual">Manual</SelectItem>
+                    <SelectItem value="variable">RobTarget Var</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {src === "manual" ? (
+                <>
+                  <div className="text-xs font-medium text-muted-foreground pt-1">Position (m)</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["x", "y", "z"] as const).map((k) => (
+                      <Input key={k} className="h-8" placeholder={k.toUpperCase()} inputMode="decimal"
+                        value={block[k] ?? ""} onChange={(e) => updateBlock(index, k, e.target.value)} />
+                    ))}
+                  </div>
+                  <div className="text-xs font-medium text-muted-foreground pt-1">Orientation A/B/C (°)</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["a", "b", "c"] as const).map((k) => (
+                      <Input key={k} className="h-8" placeholder={k.toUpperCase()} inputMode="decimal"
+                        value={block[k] ?? ""} onChange={(e) => updateBlock(index, k, e.target.value)} />
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <div className="w-[100px] text-xs text-muted-foreground">Point Var:</div>
+                  <Select value={block.pointVariable || ""} onValueChange={(v) => updateBlock(index, "pointVariable", v)}>
+                    <SelectTrigger className="h-8"><SelectValue placeholder="-- Select RobTarget --" /></SelectTrigger>
+                    <SelectContent>
+                      {state.variables.filter((v: any) => String(v.type).includes("Robot Target") && v.name?.trim()).map((v: any, i: number) => (
+                        <SelectItem key={i} value={v.name}>{v.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <div className="w-[110px] text-xs text-muted-foreground">Speed (mm/s):</div>
+                <Input className="h-8" inputMode="decimal" value={block.speed || ""} onChange={(e) => updateBlock(index, "speed", e.target.value)} />
+              </div>
+
+              {src === "manual" && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <div className="w-[110px] text-xs text-muted-foreground">Ang Speed (°/s):</div>
+                    <Input className="h-8" inputMode="decimal" value={block.angular_speed_deg || ""} onChange={(e) => updateBlock(index, "angular_speed_deg", e.target.value)} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-[110px] text-xs text-muted-foreground">Accel (m/s²):</div>
+                    <Input className="h-8" inputMode="decimal" value={block.accel || ""} onChange={(e) => updateBlock(index, "accel", e.target.value)} />
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        }
+
+        case "Move J": {
+          const src = block.src || "manual";
+          return (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="w-[100px] text-xs text-muted-foreground">Source:</div>
+                <Select value={src} onValueChange={(v) => updateBlock(index, "src", v)}>
+                  <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="manual">Manual Joints</SelectItem>
                     <SelectItem value="variable">RobTarget Var</SelectItem>
@@ -274,87 +353,63 @@ const { digitalInputs, digitalOutputs } = useRobotIO();
                 </Select>
               </div>
 
-              {/* manual joints */}
               {src === "manual" ? (
                 <NumberGrid6 value={block.joints} onChange={(joints) => updateBlock(index, "joints", joints)} />
               ) : (
                 <div className="flex items-center gap-2">
                   <div className="w-[100px] text-xs text-muted-foreground">Point Var:</div>
                   <Select value={block.pointVariable || ""} onValueChange={(v) => updateBlock(index, "pointVariable", v)}>
-                    <SelectTrigger className="h-8">
-                      <SelectValue placeholder="-- Select RobTarget --" />
-                    </SelectTrigger>
+                    <SelectTrigger className="h-8"><SelectValue placeholder="-- Select RobTarget --" /></SelectTrigger>
                     <SelectContent>
-                      {state.variables
-                        .filter((v: any) => String(v.type).includes("Robot Target"))
-                        .map((v: any, i: number) => (
-                          <SelectItem key={i} value={v.name}>
-                            {v.name}
-                          </SelectItem>
-                        ))}
+                      {state.variables.filter((v: any) => String(v.type).includes("Robot Target") && v.name?.trim()).map((v: any, i: number) => (
+                        <SelectItem key={i} value={v.name}>{v.name}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
               )}
 
-              {/* MoveJ mode */}
-              {!isMoveL && (
-                <div className="flex items-center gap-2">
-                  <div className="w-[100px] text-xs text-muted-foreground">Mode:</div>
-                  <Select value={block.moveMode || "cartesian"} onValueChange={(v) => updateBlock(index, "moveMode", v)}>
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="cartesian">Cartesian</SelectItem>
-                      <SelectItem value="joint">Joint Angles</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                <div className="w-[100px] text-xs text-muted-foreground">Mode:</div>
+                <Select value={block.moveMode || "cartesian"} onValueChange={(v) => updateBlock(index, "moveMode", v)}>
+                  <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cartesian">Cartesian</SelectItem>
+                    <SelectItem value="joint">Joint Angles</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-              {/* Cartesian (MoveL or MoveJ cart) */}
-              {src === "manual" && (isMoveL || block.moveMode === "cartesian") && (
+              {src === "manual" && block.moveMode === "cartesian" && (
                 <div className="flex items-center gap-2">
                   <div className="w-[100px] text-xs text-muted-foreground">Cartesian:</div>
                   <Input className="h-8" placeholder="X, Y, Z, Rx, Ry, Rz" value={block.cartesian || ""} onChange={(e) => updateBlock(index, "cartesian", e.target.value)} />
                 </div>
               )}
 
-              {/* Reference */}
               <div className="flex items-center gap-2">
                 <div className="w-[100px] text-xs text-muted-foreground">Reference:</div>
                 <Select value={block.referenceType || "World"} onValueChange={(v) => updateBlock(index, "referenceType", v)}>
-                  <SelectTrigger className="h-8">
-                    <SelectValue />
-                  </SelectTrigger>
+                  <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="World">World</SelectItem>
                     <SelectItem value="WObj">Work Object</SelectItem>
                   </SelectContent>
                 </Select>
-
                 {block.referenceType === "WObj" && (
                   <Select value={block.referenceObject || ""} onValueChange={(v) => updateBlock(index, "referenceObject", v)}>
-                    <SelectTrigger className="h-8">
-                      <SelectValue placeholder="-- Select WObj --" />
-                    </SelectTrigger>
+                    <SelectTrigger className="h-8"><SelectValue placeholder="-- Select WObj --" /></SelectTrigger>
                     <SelectContent>
-                      {state.variables
-                        .filter((v: any) => String(v.type).includes("Work Object"))
-                        .map((v: any, i: number) => (
-                          <SelectItem key={i} value={v.name}>
-                            {v.name}
-                          </SelectItem>
-                        ))}
+                      {state.variables.filter((v: any) => String(v.type).includes("Work Object") && v.name?.trim()).map((v: any, i: number) => (
+                        <SelectItem key={i} value={v.name}>{v.name}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 )}
               </div>
 
-              {/* Speed */}
               <div className="flex items-center gap-2">
-                <div className="w-[100px] text-xs text-muted-foreground">Speed ({isMoveL ? "mm/s" : "°/s"}):</div>
+                <div className="w-[100px] text-xs text-muted-foreground">Speed (°/s):</div>
                 <Input className="h-8" inputMode="decimal" value={block.speed || ""} onChange={(e) => updateBlock(index, "speed", e.target.value)} />
               </div>
             </div>
@@ -480,7 +535,7 @@ const { digitalInputs, digitalOutputs } = useRobotIO();
                       <SelectValue placeholder="-- Select variable --" />
                     </SelectTrigger>
                     <SelectContent>
-                      {state.variables.map((v: any, i: number) => (
+                      {state.variables.filter((v: any) => v.name?.trim()).map((v: any, i: number) => (
                         <SelectItem key={i} value={v.name}>
                           {v.name}
                         </SelectItem>
@@ -552,7 +607,7 @@ const { digitalInputs, digitalOutputs } = useRobotIO();
           );
 
         case "For Loop": {
-          const numberVars = state.variables.filter((v: any) => v.dataType === "Number");
+          const numberVars = state.variables.filter((v: any) => v.dataType === "Number" && v.name?.trim());
           const endSource = block.endSource || "Literal";
 
           return (

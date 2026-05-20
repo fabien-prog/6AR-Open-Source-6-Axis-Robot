@@ -1,4 +1,5 @@
 import React, { useCallback } from "react";
+import * as THREE from "three";
 import { FiChevronDown, FiChevronUp, FiPlus, FiTrash2 } from "react-icons/fi";
 
 import { cn } from "@/lib/utils";
@@ -18,7 +19,36 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
+import { useSocket } from "@/contexts/SocketContext";
 import { useJointStore } from "../../stores/JointStore";
+
+function fkOrientationToEulerDeg(ori: any): [number, number, number] {
+  let q: THREE.Quaternion;
+
+  if (Array.isArray(ori) && ori.length === 4 && ori.every((v) => Number.isFinite(v))) {
+    q = new THREE.Quaternion(ori[0], ori[1], ori[2], ori[3]);
+  } else if (
+    Array.isArray(ori) && ori.length === 3 &&
+    ori.every((row) => Array.isArray(row) && row.length === 3 && row.every((v) => Number.isFinite(v)))
+  ) {
+    const m = new THREE.Matrix4().set(
+      ori[0][0], ori[0][1], ori[0][2], 0,
+      ori[1][0], ori[1][1], ori[1][2], 0,
+      ori[2][0], ori[2][1], ori[2][2], 0,
+      0, 0, 0, 1,
+    );
+    q = new THREE.Quaternion().setFromRotationMatrix(m);
+  } else {
+    return [0, 0, 0];
+  }
+
+  const e = new THREE.Euler().setFromQuaternion(q, "XYZ");
+  return [
+    THREE.MathUtils.radToDeg(e.x),
+    THREE.MathUtils.radToDeg(e.y),
+    THREE.MathUtils.radToDeg(e.z),
+  ];
+}
 
 const variableCategories = ["Variable (VAR)", "Constant (CONST)", "Work Object", "Robot Target"] as const;
 const dataTypes = ["Boolean", "Number", "String", "Coordinate", "Array"] as const;
@@ -38,7 +68,8 @@ export default function VariableEditor({
   variables: any[];
   dispatch: React.Dispatch<any>;
 }) {
-  const storeAngles = useJointStore((s) => s.angles);
+  const { socket } = useSocket();
+  const anglesUi = useJointStore((s) => s.anglesUi);
 
   const addVariable = () => {
     dispatch({
@@ -78,21 +109,41 @@ export default function VariableEditor({
   const teachVariable = useCallback(
     (index: number) => {
       const v = variables[index];
-      if (v.type === "Work Object" || v.type === "Robot Target") {
-        const jointsArr =
-          Array.isArray(storeAngles) && storeAngles.length === 6
-            ? storeAngles
-            : [0, 0, 0, 0, 0, 0];
+      // anglesUi is set by the 3D viewer (setAnglesUi) and always reflects
+      // what's currently shown — reliable with or without a real robot.
+      const angles = anglesUi.map(Number);
 
-        const fmt = jointsArr.map((j) => +Number(j).toFixed(3)).join(",");
-        dispatch({
-          type: "UPDATE_VARIABLE",
-          index,
-          payload: { value: `(${fmt})` },
-        });
+      if (v.type === "Robot Target" && v.representation === "Cartesian") {
+        if (!socket) return;
+
+        const onResponse = ({ position, orientation }: any) => {
+          clearTimeout(timeout);
+          const pos = Array.isArray(position) && position.length >= 3 ? position : [0, 0, 0];
+          const [a, b, c] = fkOrientationToEulerDeg(orientation);
+          const fmt = [
+            +Number(pos[0]).toFixed(4),
+            +Number(pos[1]).toFixed(4),
+            +Number(pos[2]).toFixed(4),
+            +a.toFixed(3),
+            +b.toFixed(3),
+            +c.toFixed(3),
+          ].join(",");
+          dispatch({ type: "UPDATE_VARIABLE", index, payload: { value: `(${fmt})` } });
+        };
+
+        // Safety: remove listener if Pi bridge doesn't respond within 3 s
+        const timeout = window.setTimeout(() => {
+          socket.off("fk_response", onResponse);
+        }, 3000);
+
+        socket.once("fk_response", onResponse);
+        socket.emit("fk_request", { angles });
+      } else if (v.type === "Work Object" || v.type === "Robot Target") {
+        const fmt = angles.map((j) => +j.toFixed(3)).join(",");
+        dispatch({ type: "UPDATE_VARIABLE", index, payload: { value: `(${fmt})` } });
       }
     },
-    [variables, storeAngles, dispatch],
+    [variables, anglesUi, socket, dispatch],
   );
 
   return (

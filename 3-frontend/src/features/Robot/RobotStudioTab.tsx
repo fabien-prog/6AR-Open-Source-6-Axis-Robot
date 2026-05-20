@@ -9,7 +9,12 @@ import AddStlDialog from "@/features/Robot/AddStlDialog";
 import type { ExtraModelProps } from "@/features/Robot/ExtraModel";
 
 import SimRobotCards, { SimPoseEditorWidget, SimLinearMoveWidget, SimMotionPeaksWidget, SimStreamProvider } from "@/features/Robot/SimRobotCards";
-
+import { PiArrowsClockwiseBold } from "react-icons/pi";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useRobotIO, useRobotKinematics } from "@/contexts/robot";
+import { useJointStore } from "@/stores/JointStore";
+import { movePhysicalToVirtual } from "@/lib/syncMotion";
+import { toast } from "sonner";
 import PhysRobotCards, {
   PhysQuickBarWidget,
   PhysPresetsWidget,
@@ -148,7 +153,7 @@ const WIDGET_META: Record<WidgetKind, { title: string; w: number; h: number; gro
   "phys.full": { title: "Physical Robot (Full)", w: 560, h: 820, group: "Physical Robot" },
 
   "sim.pose": { title: "Pose Editor (IK)", w: 500, h: 320, group: "Simulation" },
-  "sim.linear": { title: "Linear Move (Sim Stream)", w: 520, h: 460, group: "Simulation" },
+  "sim.linear": { title: "Linear Move Simulation", w: 560, h: 760, group: "Simulation" },
   "sim.peaks": { title: "Motion Peaks", w: 520, h: 680, group: "Simulation" },
 
   "phys.quick": { title: "Physical Console (Quick Bar)", w: 760, h: 160, group: "Physical Robot" },
@@ -192,17 +197,17 @@ function defaultLayout(): Widget[] {
   });
 }
 
-function WidgetBody({ kind, speedPct }: { kind: WidgetKind; speedPct: number }) {
+function WidgetBody({ kind }: { kind: WidgetKind }) {
   switch (kind) {
     case "sim.full":
-      return <SimRobotCards speedPct={speedPct} />;
+      return <SimRobotCards />;
     case "phys.full":
       return <PhysRobotCards />;
 
     case "sim.pose":
       return <SimPoseEditorWidget />;
     case "sim.linear":
-      return <SimLinearMoveWidget speedPct={speedPct} />;
+      return <SimLinearMoveWidget />;
     case "sim.peaks":
       return <SimMotionPeaksWidget />;
 
@@ -499,7 +504,11 @@ const MemoWidgetWindow = memo(WidgetWindow);
 
 export function RobotStudioTabInner() {
   const { connected } = useRobotStatus();
-  const { stopAll } = useRobotCommands();
+  const { stopAll, getAllJointStatus, moveMultiple } = useRobotCommands();
+  const { parameters } = useRobotIO();
+  const { joints: realJoints } = useRobotKinematics();
+  const virtualJoints = useJointStore((s) => (s.anglesUi ?? (s as any).angles ?? [0, 0, 0, 0, 0, 0]) as number[]);
+  const [syncBusy, setSyncBusy] = useState(false);
   const { gizmoMode, setGizmoMode, setSelection } = useViewer();
 
   const [extras, setExtras] = useState<ExtraModelProps[]>([]);
@@ -511,6 +520,23 @@ export function RobotStudioTabInner() {
     const next = Math.max(1, Math.min(100, Math.round(v?.[0] ?? 40)));
     setSpeedPct(next);
   }, []);
+
+  const onSyncPhysicalToVirtual = useCallback(async () => {
+    if (!connected || syncBusy) return;
+
+    setSyncBusy(true);
+    try {
+      await movePhysicalToVirtual({
+        getAllJointStatus,
+        poseJoints: virtualJoints.slice(0, 6),
+        parameters,
+        moveMultiple,
+        toast,
+      });
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [connected, syncBusy, getAllJointStatus, virtualJoints, parameters, moveMultiple]);
 
   const layoutState = usePersistentLayoutState<Widget[]>(LS_KEY, defaultLayout);
   const widgets = layoutState.value;
@@ -675,30 +701,30 @@ export function RobotStudioTabInner() {
   const activeKinds = useMemo(() => new Set(widgets.map((w) => w.kind)), [widgets]);
 
   const simulationMenu: Array<{ kind: WidgetKind; label: string }> = [
-  { kind: "sim.pose", label: "Pose Editor" },
-  { kind: "sim.linear", label: "Linear Move" },
-  { kind: "sim.peaks", label: "Motion Peaks" },
-  { kind: "sim.full", label: "Simulation Panel" },
-];
+    { kind: "sim.pose", label: "Pose Editor" },
+    { kind: "sim.linear", label: "Linear Move Simulation" },
+    { kind: "sim.peaks", label: "Motion Peaks" },
+    { kind: "sim.full", label: "Simulation Panel" },
+  ];
 
-const physicalMenu: Array<{ kind: WidgetKind; label: string }> = [
-  { kind: "phys.quick", label: "Quick Controls" },
-  { kind: "phys.presets", label: "Presets" },
-  { kind: "phys.homing", label: "Homing and Calibration" },
-  { kind: "phys.single", label: "Single Joint Control" },
-  { kind: "phys.cartesian", label: "Cartesian Move" },
-  { kind: "phys.multi", label: "Multi Move" },
-  { kind: "phys.status", label: "Joint Status" },
-  { kind: "phys.full", label: "Physical Robot Panel" },
-];
+  const physicalMenu: Array<{ kind: WidgetKind; label: string }> = [
+    { kind: "phys.quick", label: "Quick Controls" },
+    { kind: "phys.presets", label: "Presets" },
+    { kind: "phys.homing", label: "Homing and Calibration" },
+    { kind: "phys.single", label: "Single Joint Control" },
+    { kind: "phys.cartesian", label: "Cartesian Move" },
+    { kind: "phys.multi", label: "Multi Move" },
+    { kind: "phys.status", label: "Joint Status" },
+    { kind: "phys.full", label: "Physical Robot Panel" },
+  ];
 
-const ioMenu: Array<{ kind: WidgetKind; label: string }> = [
-  { kind: "io.header", label: "I/O Overview" },
-  { kind: "io.estop", label: "Emergency Stop" },
-  { kind: "io.buttons", label: "Button Inputs" },
-  { kind: "io.limits", label: "Limit Switches" },
-  { kind: "io.outputs", label: "Outputs" },
-];
+  const ioMenu: Array<{ kind: WidgetKind; label: string }> = [
+    { kind: "io.header", label: "I/O Overview" },
+    { kind: "io.estop", label: "Emergency Stop" },
+    { kind: "io.buttons", label: "Button Inputs" },
+    { kind: "io.limits", label: "Limit Switches" },
+    { kind: "io.outputs", label: "Outputs" },
+  ];
 
   const minimized = useMemo(() => widgets.filter((w) => w.visible && w.minimized).sort((a, b) => a.title.localeCompare(b.title)), [widgets]);
 
@@ -871,6 +897,49 @@ const ioMenu: Array<{ kind: WidgetKind; label: string }> = [
 
                 <AddStlDialog onAdd={handleAddExtra} />
 
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button size="sm" variant="secondary" className="rounded-xl" disabled={!connected || syncBusy}>
+                      <PiArrowsClockwiseBold className="mr-2 h-4 w-4" />
+                      {syncBusy ? "Syncing..." : "Sync P→V"}
+                    </Button>
+                  </PopoverTrigger>
+
+                  <PopoverContent className="w-[420px] rounded-2xl p-3" align="start">
+                    <div className="space-y-3">
+                      <div>
+                        <div className="text-sm font-semibold">Move Physical → Virtual</div>
+                        <div className="text-xs text-muted-foreground">Reads the real robot joint positions and sends one synchronized MoveMultiple to match the current virtual pose.</div>
+                      </div>
+
+                      <Separator />
+
+                      <div className="grid grid-cols-3 gap-2">
+                        {Array.from({ length: 6 }).map((_, i) => (
+                          <Card key={`real-${i}`} className="p-2">
+                            <div className="text-[11px] font-semibold text-muted-foreground">Real J{i + 1}</div>
+                            <div className="text-sm font-semibold">{Number(realJoints?.[i] ?? 0).toFixed(2)}°</div>
+                          </Card>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        {Array.from({ length: 6 }).map((_, i) => (
+                          <Card key={`virt-${i}`} className="p-2">
+                            <div className="text-[11px] font-semibold text-muted-foreground">Virtual J{i + 1}</div>
+                            <div className="text-sm font-semibold">{Number(virtualJoints?.[i] ?? 0).toFixed(2)}°</div>
+                          </Card>
+                        ))}
+                      </div>
+
+                      <Button className="w-full rounded-xl" onClick={onSyncPhysicalToVirtual} disabled={!connected || syncBusy}>
+                        <PiArrowsClockwiseBold className="mr-2 h-4 w-4" />
+                        {syncBusy ? "Sending MoveMultiple..." : "Move Physical Robot To Virtual Pose"}
+                      </Button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+
                 <Button size="sm" variant="destructive" onClick={onStop} disabled={!connected} className="rounded-xl">
                   <PiStopBold className="mr-2 h-4 w-4" />
                   Stop
@@ -895,7 +964,7 @@ const ioMenu: Array<{ kind: WidgetKind; label: string }> = [
                   onToggleMinimize={toggleMinimize}
                   onClose={closeWidget}
                 >
-                  <MemoWidgetBody kind={w.kind} speedPct={speedPct} />
+                  <MemoWidgetBody kind={w.kind} />
                 </MemoWidgetWindow>
               ))}
           </div>
