@@ -217,8 +217,8 @@ MIT — free to use, modify, and distribute.
 - [x] Full-pose IK + TCP motion profiler (working)
 - [x] Pneumatic gripper control (working)
 - [x] React/Vite controller UI v2 with robot/program/run workspaces
-- [ ] Revise J2-J3 CAD, manufacture the parts, and assembly!
-- [ ] URDF mesh optimization + joint limits
+- [x] Revise J2-J3 CAD, manufacture the parts, and assembly!
+- [x] URDF mesh optimization + joint limits
 - [ ] Joint feedback with absolute encoders + PID
 - [ ] Public CAD, BOM, and build documentation
 
