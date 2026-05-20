@@ -13,11 +13,7 @@ export default function initSocketService(
         writeTeensy({ cmd: 'ListParameters' })
             .catch(e => console.error('[Teensy]', e.message));
 
-        // ——— non-batched linear stream (preserved twice) ———
-        socket.on('linearMove', msg => {
-            console.log('[Socket] linearMove (stream):', msg);
-            sendLinearMove(msg);
-        });
+        // ——— non-batched linear stream ———
         socket.on('linearMove', msg => {
             console.log('[Socket] linearMove (stream):', msg);
             sendLinearMove(msg);

@@ -1,183 +1,138 @@
-# Teensy Firmware Serial API Guide (Current)
+# Teensy Firmware Serial API
 
-This document describes the **JSON‑over‑UART** interface for the Teensy 4.1 robot firmware.
+The Teensy 4.1 firmware speaks newline-delimited JSON over UART.
 
-- **Port**: `Serial2` (hardware UART, pins RX=7, TX=8)
-- **Baud**: **921600**
-- **Framing**: ASCII JSON, **1 object per line**, `\n` terminated
-- **Handlers**: `CommManager.cpp`
+- port: `Serial2` on Teensy pins RX=7, TX=8
+- baud: `921600`
+- framing: one JSON object per line, terminated by `\n`
+- handler file: `1-firmware/src/CommManager.cpp`
 
-> **ID echo:** If you include `"id"` in a request, firmware echoes it back in the reply. You should include an `id` in **every** command to keep Pi‑side ACK tracking reliable.
+Include an `id` in every request. Firmware echoes that `id` in direct responses so the Pi bridge can match ACKs.
 
-## Message Format
+## Message Shape
 
-### Request
-
-```json
-{ "cmd": "CommandName", "...": "...", "id": 123 }
-```
-
-### Response (generic)
+Request:
 
 ```json
-{ "cmd": "CommandName", "status": "ok", "id": 123 }
-{ "cmd": "CommandName", "status": "error", "error": "description", "id": 123 }
+{ "cmd": "CommandName", "id": 123 }
 ```
 
-### Response (with data)
+Generic response:
 
 ```json
-{ "cmd": "systemStatus", "data": { "uptime": 123456, "estop": 0, "homing": 1 }, "id": 123 }
+{ "cmd": "commandName", "status": "ok", "id": 123 }
+{ "cmd": "commandName", "status": "error", "error": "description", "id": 123 }
 ```
 
----
+Data response:
 
-## Commands
+```json
+{ "cmd": "systemStatus", "data": { "uptime": 123456, "estop": 0, "homing": 0 }, "id": 123 }
+```
 
-### 1) `GetInputs`
+## Status and IO
 
-Returns E‑stop, 12 buttons, and 6 limit switches (all **debounced**).
+### `GetInputs`
 
-**Request**
+Returns E-stop, 12 buttons, and 6 limit switches.
 
 ```json
 { "cmd": "GetInputs", "id": 1 }
 ```
-
-**Response**
 
 ```json
 {
   "cmd": "inputStatus",
   "data": {
     "estop": 0,
-    "buttons": [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "buttons": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     "limits": [0, 0, 0, 0, 0, 0]
   },
   "id": 1
 }
 ```
 
----
-
-### 2) `GetOutputs`
+### `GetOutputs`
 
 Returns 9 relay output states.
-
-**Request**
 
 ```json
 { "cmd": "GetOutputs", "id": 2 }
 ```
 
-**Response**
-
 ```json
 { "cmd": "outputStatus", "data": { "states": [0, 1, 0, 0, 0, 0, 0, 0, 1] }, "id": 2 }
 ```
 
----
+### `GetSystemStatus`
 
-### 3) `GetSystemStatus`
-
-**Request**
+`uptime` is raw `millis()` in milliseconds.
 
 ```json
 { "cmd": "GetSystemStatus", "id": 3 }
 ```
 
-**Response** _(from `handleGetSystemStatus`)_
-`uptime` is in **milliseconds** (raw `millis()`).
-
 ```json
 { "cmd": "systemStatus", "data": { "uptime": 123456, "estop": 0, "homing": 0 }, "id": 3 }
 ```
 
----
+### `GetJointStatus`
 
-### 4) `GetJointStatus`
-
-- Omit `joint` → **all joints** (`jointStatusAll`)
-- Include `joint` (1–6) → **single joint** (`jointStatus`)
-
-**Request (all)**
+Omit `joint` for all joints, or pass a 1-based joint index for one joint.
 
 ```json
 { "cmd": "GetJointStatus", "id": 4 }
 ```
 
-**Response**
-
 ```json
 {
   "cmd": "jointStatusAll",
   "data": [
-    { "joint":1,"position":0.0,"velocity":0,"acceleration":0,"target":0.0 },
-    ...
+    { "joint": 1, "position": 0, "velocity": 0, "acceleration": 0, "target": 0 }
   ],
   "id": 4
 }
 ```
 
-**Request (single)**
-
 ```json
 { "cmd": "GetJointStatus", "joint": 2, "id": 5 }
 ```
 
-**Response**
-
 ```json
 {
   "cmd": "jointStatus",
-  "data": { "joint": 2, "position": 12.34, "velocity": 5.6, "acceleration": 2.5, "target": 20.0 },
+  "data": { "joint": 2, "position": 12.34, "velocity": 5.6, "acceleration": 2.5, "target": 20 },
   "id": 5
 }
 ```
 
----
+## Position Motion
 
-### 5) `MoveTo`
+### `Move` / `MoveTo`
 
-Absolute move with trapezoidal profile in the ISR driver.
-
-**Request**
+`Move` aliases `MoveTo`.
 
 ```json
-{ "cmd": "MoveTo", "joint": 2, "target": 45.0, "speed": 10.0, "accel": 5.0, "id": 6 }
+{ "cmd": "MoveTo", "joint": 2, "target": 45, "speed": 10, "accel": 5, "id": 6 }
 ```
-
-**Response**
 
 ```json
 { "cmd": "moveTo", "status": "ok", "id": 6 }
 ```
 
----
-
-### 6) `MoveBy`
-
-Relative move (`target = current + delta`).
-
-**Request**
+### `MoveBy`
 
 ```json
-{ "cmd": "MoveBy", "joint": 3, "delta": -10.0, "speed": 8.0, "accel": 4.0, "id": 7 }
+{ "cmd": "MoveBy", "joint": 3, "delta": -10, "speed": 8, "accel": 4, "id": 7 }
 ```
-
-**Response**
 
 ```json
 { "cmd": "moveBy", "status": "ok", "id": 7 }
 ```
 
----
+### `MoveMultiple`
 
-### 7) `MoveMultiple`
-
-Fire multiple `MoveTo` in one shot.
-
-**Request**
+All arrays must have the same length. Joint indexes are 1-based.
 
 ```json
 {
@@ -190,388 +145,224 @@ Fire multiple `MoveTo` in one shot.
 }
 ```
 
-**Response**
-
 ```json
 { "cmd": "moveMultiple", "status": "ok", "id": 8 }
 ```
 
-> Arrays must be **same length**; joints are **1‑based** (1–6).
+## Jog and Stop
 
----
+### `Jog`
 
-### 8) `Jog`
-
-**Important:** Field names are `target` (deg/s) and `accel` (deg/s²).
-
-**Request**
+`target` is deg/s and `accel` is deg/s².
 
 ```json
-{ "cmd": "Jog", "joint": 4, "target": 12.0, "accel": 120.0, "id": 9 }
+{ "cmd": "Jog", "joint": 4, "target": 12, "accel": 120, "id": 9 }
 ```
-
-**Response**
 
 ```json
 { "cmd": "jog", "status": "ok", "id": 9 }
 ```
 
----
+### `Stop`
 
-### 9) `Stop` _(current behavior = global stop)_
-
-`Stop` handler ignores the `joint` and performs a **global** stop.
-
-**Request**
+Current firmware behavior is global stop, even when `joint` is provided.
 
 ```json
 { "cmd": "Stop", "joint": 4, "id": 10 }
 ```
 
-**Response**
-
 ```json
 { "cmd": "stop", "status": "ok", "id": 10 }
 ```
 
----
-
-### 10) `StopAll`
-
-Immediate stop of **all** motion and jog (no ramp).
-
-**Request**
+### `StopAll`
 
 ```json
 { "cmd": "StopAll", "id": 11 }
 ```
 
-**Response**
-
 ```json
 { "cmd": "stopAll", "status": "ok", "id": 11 }
 ```
 
----
+## Homing
 
-### 11) `Home`
+### `Home`
 
-Run 4‑phase homing for one joint. Speed requests are **clamped** to EEPROM config.
-
-**Request**
+Runs one joint through fast approach, backoff, slow approach, and final offset.
 
 ```json
-{ "cmd": "Home", "joint": 1, "speedFast": 20.0, "speedSlow": 5.0, "id": 12 }
+{ "cmd": "Home", "joint": 1, "speedFast": 20, "speedSlow": 5, "id": 12 }
 ```
-
-**Response (ack)**
 
 ```json
 { "cmd": "home", "status": "ok", "id": 12 }
 ```
 
-**Completion event**: see `homed` under **Asynchronous Events**.
+Completion event:
 
----
+```json
+{ "cmd": "homed", "data": { "joint": 1, "min": -90, "max": 90 } }
+```
 
-### 12) `AbortHoming`
-
-**Request**
+### `AbortHoming`
 
 ```json
 { "cmd": "AbortHoming", "id": 13 }
 ```
 
-**Response**
-
 ```json
 { "cmd": "abortHoming", "status": "ok", "id": 13 }
 ```
 
----
-
-### 13) `IsHoming`
-
-**Request**
+### `IsHoming`
 
 ```json
 { "cmd": "IsHoming", "id": 14 }
 ```
 
-**Response**
-
 ```json
 { "cmd": "isHoming", "data": 0, "id": 14 }
 ```
 
----
+## Live Velocity Streaming
 
-### 14) EEPROM Parameter APIs
+### `SetVel`
 
-#### `SetParam`
-
-```json
-{ "cmd": "SetParam", "key": "joint1.jointMin", "value": 0.0, "id": 15 }
-```
-
-Response: `{ "cmd":"setParam","status":"ok","id":15 }`
-
-#### `GetParam`
+Used by the Pi bridge for streamed linear motion. Both arrays must contain 6 values.
 
 ```json
-{ "cmd": "GetParam", "key": "joint1.jointMin", "default": 0.0, "id": 16 }
+{ "cmd": "SetVel", "s": [0, 0, 0, 0, 0, 0], "a": [100, 100, 100, 100, 100, 100], "id": 15 }
 ```
-
-Response:
 
 ```json
-{ "cmd": "getParam", "data": { "key": "joint1.jointMin", "value": 0.0 }, "id": 16 }
+{ "cmd": "SetVel", "status": "ok", "id": 15 }
 ```
 
-#### `ListParameters`
+`s` contains signed speeds in deg/s. `a` contains acceleration magnitudes in deg/s².
 
-Dumps all key→value pairs.
+## Batch Velocity Upload
 
-```json
-{ "cmd": "ListParameters", "id": 17 }
-```
-
-- If the JSON buffer would overflow, you get:
-
-```json
-{ "cmd": "parameters", "status": "error", "error": "EEPROM overflow", "id": 17 }
-```
-
----
-
-### 15) Soft Limits / Max Speed / Max Accel / Home Offset / Position Factor
-
-#### `SetSoftLimits` / `GetSoftLimits`
-
-```json
-{ "cmd":"SetSoftLimits","joint":1,"min":-90.0,"max":90.0,"id":18 }
-{ "cmd":"GetSoftLimits","joint":1,"id":19 }
-```
-
-`GetSoftLimits` response:
-
-```json
-{ "cmd": "getSoftLimits", "data": { "joint": 1, "min": -90.0, "max": 90.0 }, "id": 19 }
-```
-
-#### `SetMaxSpeed` / `GetMaxSpeed`
-
-```json
-{ "cmd":"SetMaxSpeed","joint":2,"value":25.0,"id":20 }
-{ "cmd":"GetMaxSpeed","joint":2,"id":21 }
-```
-
-`GetMaxSpeed` response:
-
-```json
-{ "cmd": "getMaxSpeed", "data": 25.0, "id": 21 }
-```
-
-#### `SetMaxAccel` / `GetMaxAccel`
-
-```json
-{ "cmd":"SetMaxAccel","joint":2,"value":12.5,"id":22 }
-{ "cmd":"GetMaxAccel","joint":2,"id":23 }
-```
-
-`GetMaxAccel` response:
-
-```json
-{ "cmd": "getMaxAccel", "data": 12.5, "id": 23 }
-```
-
-#### `SetHomeOffset` / `GetHomeOffset`
-
-```json
-{ "cmd":"SetHomeOffset","joint":3,"value":-5.0,"id":24 }
-{ "cmd":"GetHomeOffset","joint":3,"id":25 }
-```
-
-`GetHomeOffset` response:
-
-```json
-{ "cmd": "getHomeOffset", "data": -5.0, "id": 25 }
-```
-
-#### `SetPositionFactor` / `GetPositionFactor`
-
-```json
-{ "cmd":"SetPositionFactor","joint":4,"value":1.0,"id":26 }
-{ "cmd":"GetPositionFactor","joint":4,"id":27 }
-```
-
-`GetPositionFactor` response:
-
-```json
-{ "cmd": "getPositionFactor", "data": 1.0, "id": 27 }
-```
-
----
-
-### 16) `Output`
-
-Set multiple relay outputs at once.
-
-- **Indices are 1‑based** in the request; firmware converts to 0‑based internally.
-- `states` values are 0/1.
-
-**Request**
-
-```json
-{ "cmd": "Output", "outputs": [1, 3], "states": [1, 0], "id": 28 }
-```
-
-**Response**
-
-```json
-{ "cmd": "output", "status": "ok", "id": 28 }
-```
-
----
-
-### 17) `Restart`
-
-Saves current joint positions and performs a **soft reset**.
-
-**Request**
-
-```json
-{ "cmd": "Restart", "id": 29 }
-```
-
-**Response (ack before reset)**
-
-```json
-{ "cmd": "Restart", "status": "ok", "id": 29 }
-```
-
----
-
-## Batch Velocity Streaming (High‑Rate Jog Slices)
-
-Use this to stream time‑synchronized **velocity** segments (deg/s with deg/s² accel) for all joints.
+Batch mode preloads all segments and lets firmware execute them internally. Each segment is subdivided into 50 firmware-side velocity updates.
 
 ### `BeginBatch`
 
-- Starts loading `count` segments.
-- `dt` is the **duration per segment** in seconds (must be > 0).
-- On begin, the firmware preps jog mode at 0 speed to avoid discontinuities.
-
-**Request**
-
 ```json
-{ "cmd": "BeginBatch", "count": 100, "dt": 0.02, "id": 30 }
+{ "cmd": "BeginBatch", "count": 100, "dt": 0.02, "id": 16 }
 ```
 
-**Response**
-
 ```json
-{ "cmd": "BeginBatch", "status": "ok", "id": 30 }
+{ "cmd": "BeginBatch", "status": "ok", "id": 16 }
 ```
 
-### `M` (Segment)
-
-- One per segment; arrays must be length 6.
-- `s`: speeds (deg/s), `a`: accelerations (deg/s²).
-- Internally, each segment is sub‑divided into **50** sub‑steps for smoothness.
-
-**Request**
+### `M`
 
 ```json
-{ "cmd": "M", "s": [0, 10, 0, 0, 0, 0], "a": [0, 200, 0, 0, 0, 0], "id": 31 }
+{ "cmd": "M", "s": [0, 10, 0, 0, 0, 0], "a": [0, 200, 0, 0, 0, 0], "id": 17 }
 ```
-
-**Response**
 
 ```json
-{ "cmd": "SegmentLoaded", "status": "ok", "id": 31 }
+{ "cmd": "SegmentLoaded", "status": "ok", "id": 17 }
 ```
 
-After last segment is loaded:
+After the last expected segment:
 
 ```json
 { "cmd": "BatchExecStart", "status": "ok" }
 ```
 
-### Execution & Completion
-
-`handleBatchExecution()` runs every loop and feeds sub‑steps to the stepper ISR via `JointManager::feedVelocitySlice`.
 At the end:
 
 ```json
 { "cmd": "BatchComplete", "status": "ok" }
 ```
 
-(Also ramps all joints to 0 speed gracefully.)
-
 ### `AbortBatch`
 
-**Request**
-
 ```json
-{ "cmd": "AbortBatch", "id": 32 }
+{ "cmd": "AbortBatch", "id": 18 }
 ```
 
-**Response**
-
 ```json
-{ "cmd": "BatchAborted", "status": "ok", "id": 32 }
+{ "cmd": "BatchAborted", "status": "ok", "id": 18 }
 ```
 
-> Limits are enforced in **position moves**. Batch is velocity‑mode; your host should ensure profiles keep joints inside allowed ranges (or stream a safe profile right after homing).
+## Parameters
 
----
+### `ListParameters`
+
+```json
+{ "cmd": "ListParameters", "id": 19 }
+```
+
+```json
+{ "cmd": "parameters", "data": { "params": { "joint1.maxSpeed": 100 } }, "id": 19 }
+```
+
+### `SetParam` / `GetParam`
+
+```json
+{ "cmd": "SetParam", "key": "joint1.jointMin", "value": -90, "id": 20 }
+{ "cmd": "GetParam", "key": "joint1.jointMin", "default": 0, "id": 21 }
+```
+
+### Joint Parameter Helpers
+
+```json
+{ "cmd": "SetSoftLimits", "joint": 1, "min": -90, "max": 90, "id": 22 }
+{ "cmd": "GetSoftLimits", "joint": 1, "id": 23 }
+{ "cmd": "SetMaxSpeed", "joint": 1, "value": 100, "id": 24 }
+{ "cmd": "GetMaxSpeed", "joint": 1, "id": 25 }
+{ "cmd": "SetMaxAccel", "joint": 1, "value": 500, "id": 26 }
+{ "cmd": "GetMaxAccel", "joint": 1, "id": 27 }
+{ "cmd": "SetHomeOffset", "joint": 1, "value": 0, "id": 28 }
+{ "cmd": "GetHomeOffset", "joint": 1, "id": 29 }
+{ "cmd": "SetPositionFactor", "joint": 1, "value": 1, "id": 30 }
+{ "cmd": "GetPositionFactor", "joint": 1, "id": 31 }
+```
+
+## Outputs and System
+
+### `Output`
+
+`outputs` are 1-based relay indexes.
+
+```json
+{ "cmd": "Output", "outputs": [1, 3], "states": [1, 0], "id": 32 }
+```
+
+```json
+{ "cmd": "output", "status": "ok", "id": 32 }
+```
+
+### `Restart`
+
+Saves current joint positions and performs a software reset.
+
+```json
+{ "cmd": "Restart", "id": 33 }
+```
+
+```json
+{ "cmd": "Restart", "status": "ok", "id": 33 }
+```
 
 ## Asynchronous Events
 
-Emitted by firmware without request:
+Firmware can emit these without a matching request:
 
-- **`inputStatus`** — on E‑stop/button/limit changes (same shape as `GetInputs` response).
-- **`homed`** — after a joint finishes homing:
+- `inputStatus`: E-stop/button/limit state
+- `homed`: one joint finished homing
+- `SegmentLoaded`: batch segment accepted
+- `BatchExecStart`: loaded batch started executing
+- `BatchComplete`: batch finished
+- `BatchAborted`: batch aborted
+- `log`: diagnostic text
 
-  ```json
-  { "cmd": "homed", "data": { "joint": 1, "min": -90.0, "max": 90.0 } }
-  ```
+## Notes
 
-- **`BatchExecStart`**, **`SegmentLoaded`**, **`BatchComplete`**, **`BatchAborted`**
-- **`log`** — diagnostic messages:
-
-  ```json
-  { "cmd": "log", "data": "text message" }
-  ```
-
----
-
-## Emergency Stop Behavior (summary)
-
-- Hardware ISR triggers **immediate motion stop** and emits `inputStatus`.
-- Latches until reset condition: **E‑stop released + GREEN button pressed**.
-- During E‑stop, motion commands are rejected.
-
----
-
-## Notes & Edge Cases
-
-- **Case‑sensitive** `cmd` names (`"MoveTo"` not `"moveto"`).
-- **`Stop` currently acts like `StopAll`** (global). If you need per‑joint soft stop, prefer streaming a batch that ramps that joint to 0.
-- **`Output` indices are 1‑based** in the request.
-- `GetSystemStatus` → `uptime` is **ms**. A separate internal helper may report `uptimeSec` in other code paths; client code should rely on the request/response pair above.
-- `ListParameters` will return an **error** if the JSON would overflow (protects against truncated dumps).
-
----
-
-## See Also
-
-- `CommManager.*` — JSON parsing, command routing, **batch** loader/executor
-- `JointManager.*` — deg‑space API, soft limits, velocity slice bridge
-- `StepperManager.*` — 100 kHz ISR pulse engine (position + jog)
-- `CalibrationManager.*` — homing FSM (fast → backoff 7° → slow → offset)
-- `ConfigManager.*` — EEPROM JSON config + joint position persistence
-- `SafetyManager.*`, `IOManager.*`, `HelperManager.*`, `Config.*`, `PinDef.*`
-
----
+- Command names are case-sensitive.
+- `Stop` currently behaves like `StopAll`.
+- `Output` indexes are 1-based in requests.
+- `GetSystemStatus.data.uptime` is milliseconds.
+- Position moves enforce soft limits in joint user space. Host-generated velocity streams should stay within safe limits.

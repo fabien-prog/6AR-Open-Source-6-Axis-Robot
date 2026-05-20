@@ -76,7 +76,8 @@ void CommManager::enqueueRaw(const char *line)
 {
   if (_rqCount < RAW_QUEUE_MAX)
   {
-    strcpy(_rawQueue[_rqTail], line);
+    strncpy(_rawQueue[_rqTail], line, CMD_BUF_SIZE - 1);
+    _rawQueue[_rqTail][CMD_BUF_SIZE - 1] = '\0';
     _rqTail = (_rqTail + 1) % RAW_QUEUE_MAX;
     _rqCount++;
   }
@@ -86,7 +87,8 @@ bool CommManager::dequeueRaw(char *out)
 {
   if (_rqCount == 0)
     return false;
-  strcpy(out, _rawQueue[_rqHead]);
+  strncpy(out, _rawQueue[_rqHead], CMD_BUF_SIZE - 1);
+  out[CMD_BUF_SIZE - 1] = '\0';
   _rqHead = (_rqHead + 1) % RAW_QUEUE_MAX;
   _rqCount--;
   return true;
@@ -370,6 +372,9 @@ void CommManager::dispatchCommand(JsonObject doc)
     break;
   case fnv1a("ListParameters"):
     handleListParameters(doc);
+    break;
+  case fnv1a("SetVel"):
+    handleSetVel(doc);
     break;
   default:
     sendCallback("unknownCmd", false, cmd);
@@ -798,6 +803,27 @@ void CommManager::handleOutput(JsonObject &doc)
   }
 
   sendCallback("output", true);
+}
+
+// ——— SetVel: live 20 ms velocity setpoint for streaming linear moves ———
+void CommManager::handleSetVel(JsonObject &doc)
+{
+  auto arrS = doc["s"].as<JsonArray>();
+  auto arrA = doc["a"].as<JsonArray>();
+  if (arrS.size() != CONFIG_JOINT_COUNT || arrA.size() != CONFIG_JOINT_COUNT)
+  {
+    sendCallback("SetVel", false, "badLength");
+    return;
+  }
+  float speeds[CONFIG_JOINT_COUNT];
+  float accels[CONFIG_JOINT_COUNT];
+  for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
+  {
+    speeds[j] = arrS[j].as<float>();          // signed deg/s — direction in sign
+    accels[j] = fabsf(arrA[j].as<float>());   // magnitude deg/s²
+  }
+  JointManager::instance().feedVelocitySlice(speeds, accels);
+  sendCallback("SetVel", true);
 }
 
 // ——— Convenience —————————————————————————————————

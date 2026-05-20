@@ -1,153 +1,143 @@
-# 4-Setup-Guide.md
+# Setup Guide
 
-## Getting Started
+This guide covers the current firmware, Pi bridge, and frontend layout.
 
-This guide explains how to flash the firmware to the Teensy 4.1, run the Pi bridge (Node.js + Python), and launch the React + Electron frontend interface for the 6AR robot.
+## 1. Firmware
 
----
+Directory:
 
-## 1. Flash Firmware to Teensy 4.1
+```text
+1-firmware/
+```
 
-### Directory: `1-firmware/`
+The firmware is a PlatformIO Arduino project for Teensy 4.1.
 
-You must use **PlatformIO** to upload the firmware.
+Dependencies are declared in `platformio.ini`:
 
-### Steps to upload code to teensy
+- `bblanchon/ArduinoJson`
+- `waspinator/AccelStepper`
 
-1. Install [Teensyduino](https://www.pjrc.com/teensy/teensyduino.html)
-2. Open the PlatformIO project in the `1-firmware/` directory
-3. Select the board: `Teensy 4.1`
-4. Upload the firmware via USB
+Build or upload with PlatformIO:
 
----
+```bash
+cd 1-firmware
+pio run
+pio run --target upload
+```
 
-## 2. Run Pi Bridge on Raspberry Pi
+The firmware uses `Serial2` for Pi communication and starts it at `921600` baud. The USB debug serial also starts at `921600`.
 
-### Directory: `2-pi-bridge/`
+## 2. Pi Bridge
 
-This part runs the Node.js server, launches the Python IK service, and handles UART communication with the Teensy.
+Directory:
 
----
+```text
+2-pi-bridge/
+```
 
-### 1. Install System Dependencies
+The bridge is a Node.js server plus a Python IK process.
+
+Install system tools on the Pi:
 
 ```bash
 sudo apt update
 sudo apt install -y python3 python3-venv python3-pip nodejs npm
 ```
 
-Verify versions:
+Install Node dependencies:
 
 ```bash
-node -v
-npm -v
-python3 --version
-```
-
----
-
-### 2. Clone the Project (if not done yet)
-
-```bash
-cd ~
-git clone https://github.com/fabien-prog/6AR-Open-Source-6-Axis-Robot.git
-cd 6AR-Open-Source-6-Axis-Robot/2-pi-bridge
-```
-
----
-
-### 3. Install Node.js Dependencies
-
-```bash
+cd 2-pi-bridge
 npm install
 ```
 
----
-
-### 4. Create Python Virtual Environment
+Create the Python virtual environment expected by `IKService.js`:
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-```
-
----
-
-### 5. Install Python Packages
-
-```bash
 pip install -r requirements.txt
 ```
 
-If `requirements.txt` is missing, create it:
-
-```txt
-numpy
-scipy
-spatialmath-python
-roboticstoolbox-python
-```
-
----
-
-### 6. Start the Bridge Server
+Start the bridge:
 
 ```bash
-source venv/bin/activate
 node server.js
 ```
 
-Expected terminal output:
+Expected bridge details:
 
-```plaintext
-[Server] Starting up…
-[Server] Python command: /home/pi/6AR-Open-Source-6-Axis-Robot/2-pi-bridge/venv/bin/python ...
-[Server] Listening on 0.0.0.0:5000
-[Teensy] Opened /dev/ttyAMA0@115200
+- listens on `0.0.0.0:5001`
+- serves frontend production files from `2-pi-bridge/public`
+- opens Teensy UART at `/dev/ttyAMA0`
+- uses `921600` baud
+- launches `2-pi-bridge/venv/bin/python -u ik_service.py`
+
+## 3. Frontend
+
+Directory:
+
+```text
+3-frontend/
 ```
 
----
-
-## 3. Start the React Frontend UI
-
-### Directory: `3-frontend/`
-
-This runs the UI built with React and Chakra UI.
-
----
-
-### Steps to run frontend
+Run a local dev UI:
 
 ```bash
-cd ../3-frontend
+cd 3-frontend
 npm install
-npm start
+npm run dev
 ```
 
-This launches the frontend at:
+Vite normally serves the dev app at:
 
-```bash
-http://localhost:3000
+```text
+http://localhost:5173
 ```
 
-To build a static version for deployment on the Pi:
+The default Socket.IO bridge URL is:
+
+```text
+http://192.168.0.55:5001
+```
+
+Override it with:
 
 ```bash
+VITE_SOCKET_URL=http://localhost:5001 npm run dev
+```
+
+or set `6ar.socketUrl` in browser local storage.
+
+## 4. Build Frontend for the Pi Bridge
+
+```bash
+cd 3-frontend
 npm run build
-cp -r build/* ../2-pi-bridge/public/
+mkdir -p ../2-pi-bridge/public
+cp -r dist/* ../2-pi-bridge/public/
 ```
 
----
+Then start:
 
-## ✅ System Check
+```bash
+cd ../2-pi-bridge
+node server.js
+```
 
-When running correctly:
+Open:
 
-* The **React UI** connects to `localhost:5000` via WebSocket (in the Pi-Bridge logs)
-* The **Pi bridge server**:
+```text
+http://<pi-ip>:5001
+```
 
-  * Talks to the Teensy over UART (`/dev/ttyAMA0`)
-  * Calls the Python IK service
-* The **Teensy** executes `MoveMultiple`, `Home`, `Jog`, etc.
+## 5. Hardware/Serial Check
 
----
+When everything is connected correctly:
+
+- Teensy firmware reports readiness on USB serial at `921600`
+- Pi bridge logs `[Teensy] Opened /dev/ttyAMA0@921600`
+- frontend header shows `Online`
+- `GetJointStatus`, `GetSystemStatus`, `GetInputs`, and `ListParameters` produce live UI updates
+
+If the bridge cannot open `/dev/ttyAMA0`, check Pi UART settings and user permissions for the serial device.

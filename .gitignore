@@ -11,28 +11,55 @@
 1-firmware/.idea/
 1-firmware/.pytest_cache/
 1-firmware/.sconsign.dblite
+1-firmware/compile_commands.json
 
 # ─── 2-pi-bridge (Node.js + Python) ──────────────────────
 2-pi-bridge/node_modules/
 2-pi-bridge/venv/
+2-pi-bridge/.venv/
 2-pi-bridge/__pycache__/
+2-pi-bridge/**/__pycache__/
 2-pi-bridge/*.pyc
 2-pi-bridge/*.pyo
 2-pi-bridge/*.log
+2-pi-bridge/.pytest_cache/
+2-pi-bridge/.mypy_cache/
+2-pi-bridge/.ruff_cache/
+2-pi-bridge/.coverage
+2-pi-bridge/htmlcov/
+2-pi-bridge/public/
 
-# ─── 3-frontend (React + Electron) ───────────────────────
+# ─── 3-frontend (React + Vite) ───────────────────────────
 3-frontend/node_modules/
 3-frontend/dist/
+3-frontend/dist-ssr/
 3-frontend/build/
 3-frontend/.next/
 3-frontend/.parcel-cache/
+3-frontend/.vite/
+3-frontend/.vite-inspect/
+3-frontend/coverage/
 3-frontend/.DS_Store
 3-frontend/*.log
+3-frontend/.env
+3-frontend/.env.*
+!3-frontend/.env.example
 
 # ─── 4-documentation (Keep everything) ───────────────────
 # Nothing ignored here — keep all Markdown files
 
 # ─── Global ignores ──────────────────────────────────────
+node_modules/
+dist/
+build/
+coverage/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
 *.log
 *.tmp
 *.swp
@@ -40,5 +67,8 @@
 .DS_Store
 Thumbs.db
 .env
+.env.*
+!.env.example
 .env.local
-.vscode
+.vscode/
+.idea/

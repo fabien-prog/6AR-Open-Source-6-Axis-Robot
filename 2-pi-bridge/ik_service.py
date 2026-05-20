@@ -13,7 +13,9 @@ URDF_PATH  = os.path.join(                                # URDF path to the rob
     SCRIPT_DIR, "6AR-000-000.SLDASM", "urdf", "6AR-000-000.SLDASM.urdf"
 )
 CONTROL_DT = 0.02          # control timestep (in seconds)
-LM_ILIMIT  = 200           # max iterations for Levenberg-Marquardt IK
+LM_ILIMIT        = 200   # max iterations for feasibility / single IK queries
+TRAJ_IK_ILIMIT   = 30    # reduced limit for trajectory steps (warm-seeded, converges fast)
+TRAJ_IK_TOL      = 1e-4  # looser tolerance is fine for 20 ms interpolation steps
 V_TCP      = 0.02          # default linear speed (m/s)
 ANG_SPEED  = 45.0          # default angular speed (deg/s)
 MAX_IK_JUMP_DEG = 30.0     # not currently used — could be for IK jump prevention
@@ -39,7 +41,7 @@ def compute_fk(q):
     return Ttcp.t.tolist(), Ttcp.R.tolist(), 0  # return position, rotation, time=0
 
 # ——— IK function ———
-def compute_ik(pos, rot, seed):
+def compute_ik(pos, rot, seed, ilimit=LM_ILIMIT, tol=1e-6):
     """
     Compute inverse kinematics to reach a given position + orientation.
     Takes a position, optional rotation matrix, and a seed joint state.
@@ -51,7 +53,7 @@ def compute_ik(pos, rot, seed):
         Tmat  = np.block([[rot, np.array(pos)[:, None]], [0, 0, 0, 1]])  # build 4x4 pose matrix
         Ttool = SE3(Tmat)
     Tfl = Ttool * tool_offset.inv()  # compute desired flange pose
-    sol = robot.ikine_LM(Tfl, q0=seed, ilimit=LM_ILIMIT, tol=1e-6, joint_limits=True)
+    sol = robot.ikine_LM(Tfl, q0=seed, ilimit=ilimit, tol=tol, joint_limits=True)
     if not sol.success:
         raise ValueError(f"IK failed: {sol.reason}")
     return sol.q, 0
@@ -59,6 +61,10 @@ def compute_ik(pos, rot, seed):
 # ——— Linear move with trapezoidal velocity profile ———
 def profile_linear_move(req):
     global last_q
+
+    if "seed" in req:
+        last_q = np.radians(req["seed"][:nq])
+        log("  seeded last_q =", last_q)
 
     p1       = np.array(req["position"])
     quat1    = req.get("quaternion", [0,0,0,1])
@@ -116,10 +122,10 @@ def profile_linear_move(req):
         q1deg = np.degrees(way_q[i+1])
         vdeg  = (q1deg - prev_q) / CONTROL_DT
         adeg  = (vdeg - prev_v) / CONTROL_DT
-        vdeg  = np.clip(vdeg, -vmaxJ, vmaxJ)
-        adeg  = np.clip(adeg, -amaxJ, amaxJ)
+
         speeds.append(vdeg.round(3).tolist())
         accels.append(np.abs(adeg).round(3).tolist())
+
         prev_q, prev_v = q1deg, vdeg
 
     # NEW: add a final "come to rest" slice
@@ -292,6 +298,112 @@ def batched_linear_move(req):
         print(json.dumps({"error": str(e)}), flush=True)
         return
 
+# ——— Precomputed streaming linear move (replaces blocking streaming_linear_move) ———
+def compute_linear_stream(req):
+    """
+    Compute a full trapezoidal linear-move trajectory in one shot.
+    Outputs ONE JSON object:  {"steps": [{"s":[…],"a":[…]}, …], "dt": CONTROL_DT}
+    or on failure:            {"error": "…"}
+
+    No time.sleep() — Node.js paces delivery at CONTROL_DT intervals using setInterval.
+    Trajectory IK uses a reduced iteration limit (warm-seeded steps converge in < 10 iters).
+    """
+    global last_q
+
+    p1      = np.array(req["position"])
+    R1      = R.from_quat(req.get("quaternion", [0, 0, 0, 1])).as_matrix()
+    speed   = float(req.get("speed",              V_TCP))
+    accel   = float(req.get("accel",              0.1))
+    ang_spd = np.deg2rad(float(req.get("angular_speed_deg", ANG_SPEED)))
+    jl      = req.get("jointLimits", {})
+    vmaxJ   = np.array(jl.get("maxSpeed", [1e6] * nq))
+    amaxJ   = np.array(jl.get("maxAccel", [1e6] * nq))
+
+    p0, R0m, _ = compute_fk(last_q)
+    p0, R0     = np.array(p0), np.array(R0m)
+
+    # ── Fast feasibility check: verify target is reachable before committing ──
+    try:
+        compute_ik(p1.tolist(), R1, last_q)   # full-precision, raises on failure
+    except ValueError as e:
+        log("feasibility fail:", e)
+        print(json.dumps({"error": f"Target unreachable: {e}"}), flush=True)
+        return
+
+    # ── Motion duration ──────────────────────────────────────────────────────
+    d_lin = float(np.linalg.norm(p1 - p0))
+    theta = float((R.from_matrix(R1) * R.from_matrix(R0).inv()).magnitude())
+    T     = max(d_lin / max(speed, 1e-6), theta / max(ang_spd, 1e-6))
+
+    if T < 1e-6:
+        print(json.dumps({"steps": [], "dt": CONTROL_DT}), flush=True)
+        return
+
+    # ── Trapezoidal ramp ─────────────────────────────────────────────────────
+    t_acc  = speed / accel if accel > 0 else 0.0
+    t_acc  = min(t_acc, 0.3 * T)
+    if 2.0 * t_acc > T:
+        t_acc = T / 2.0
+    t_flat = T - 2.0 * t_acc
+
+    N     = max(2, int(np.ceil(T / CONTROL_DT)))
+    t_arr = np.linspace(0.0, T, N)
+    slerp = Slerp([0.0, 1.0], R.from_matrix([R0, R1]))
+
+    seed      = last_q.copy()
+    prev_qdeg = np.degrees(last_q)
+    prev_vdeg = np.zeros(nq)
+    steps     = []
+
+    for ti in t_arr:
+        # s(t): fraction of Cartesian path completed (trapezoidal TCP speed)
+        if d_lin > 1e-4:
+            if ti <= t_acc:
+                s = 0.5 * accel * ti * ti / d_lin
+            elif ti <= t_acc + t_flat:
+                s = (0.5 * accel * t_acc * t_acc + speed * (ti - t_acc)) / d_lin
+            else:
+                td = T - ti
+                s  = 1.0 - 0.5 * accel * td * td / d_lin
+        else:
+            s = ti / T          # pure-rotation: linear in time
+
+        s  = float(np.clip(s, 0.0, 1.0))
+        pt = (1.0 - s) * p0 + s * p1
+        Rt = slerp(s).as_matrix()
+
+        # Warm-seeded IK — fast convergence for small inter-step deltas
+        try:
+            qi, _ = compute_ik(pt.tolist(), Rt, seed,
+                               ilimit=TRAJ_IK_ILIMIT, tol=TRAJ_IK_TOL)
+        except ValueError as e:
+            log(f"  IK fail at t={ti:.3f}s: {e}")
+            print(json.dumps({"error": f"IK failed at t={ti:.3f}s: {e}"}), flush=True)
+            return
+
+        qdeg  = np.degrees(qi)
+        vdeg  = (qdeg - prev_qdeg) / CONTROL_DT
+        adeg  = (vdeg  - prev_vdeg) / CONTROL_DT
+        vdeg  = np.clip(vdeg, -vmaxJ,  vmaxJ)
+        adeg  = np.clip(adeg, -amaxJ,  amaxJ)
+
+        prev_qdeg = qdeg.copy()
+        prev_vdeg = vdeg.copy()
+        seed      = qi.copy()
+
+        steps.append({
+            "s": vdeg.round(4).tolist(),
+            "a": np.abs(adeg).round(4).tolist(),
+        })
+
+    # Final zero-velocity halt step
+    steps.append({"s": [0.0] * nq, "a": amaxJ.round(3).tolist()})
+
+    last_q = seed.copy()
+    log(f"stream ready: {len(steps)} steps, T={T:.3f}s, d_lin={d_lin:.4f}m")
+    print(json.dumps({"steps": steps, "dt": CONTROL_DT}), flush=True)
+
+
 # ——— Main input loop ———
 def main():
     global last_q
@@ -341,14 +453,21 @@ def main():
                 profile_data["jointLimits"] = req["jointLimits"]
             profile_linear_move(profile_data)
 
-        # 6) NEW — trapezoidal profile intended for execution on the Teensy
+        # 6) trapezoidal profile intended for execution on the Teensy (batch path)
         elif "profileMoveToTeensy" in req:
             profile_data = req["profileMoveToTeensy"]
             if "jointLimits" in req:
                 profile_data["jointLimits"] = req["jointLimits"]
-            profile_linear_move(profile_data)   # same generator – just a different label
+            profile_linear_move(profile_data)
 
-        # 7) unknown
+        # 7) streaming linear move — precomputes full trajectory, Node.js paces delivery
+        elif "linearMoveStream" in req:
+            lm = req["linearMoveStream"]
+            if "jointLimits" in req:
+                lm["jointLimits"] = req["jointLimits"]
+            compute_linear_stream(lm)
+
+        # 8) unknown
         else:
             print(json.dumps({"error":"Invalid arguments"}), flush=True)
 

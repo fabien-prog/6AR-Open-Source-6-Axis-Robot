@@ -1,143 +1,150 @@
-# React Frontend Overview
+# Frontend Overview
 
-## 📐 Architecture
+## Architecture
 
-```bash
-[User]
-  ⇅
-[React UI + Electron Shell]
-  ⇅  (via Socket.IO)
-[Node.js Pi Bridge Server]
-  ⇅
-[Python IK Service]   [Teensy Firmware]
+```text
+[Operator]
+    ⇅
+[React 19 + TypeScript + Vite UI]
+    ⇅ Socket.IO
+[Node Pi Bridge on :5001]
+    ⇅ stdin/stdout            ⇅ UART JSON
+[Python IK Service]       [Teensy Firmware]
 ```
 
----
+The frontend is a browser-based Vite app. It is not currently an Electron app.
 
-## 🛠 Technologies Used
+## Technologies
 
-* **React** (functional components, hooks)
-* **Chakra UI** (themeable UI components)
-* **Socket.IO** (real-time comms with backend)
-* **Three.js / drei** (3D robot visualization)
-* **Zustand** (joint state & UI state store)
-* **React Context API** (`DataContext`) for shared system data
-* **react-beautiful-dnd** (block programming drag-and-drop)
-* **Electron** (packaged desktop app)
+- React 19 functional components and hooks
+- TypeScript
+- Vite 7 with `@vitejs/plugin-react-swc`
+- Tailwind CSS 4
+- shadcn-style components built on Radix UI
+- Socket.IO client
+- TanStack Query
+- Zustand
+- Three.js, `@react-three/fiber`, `@react-three/drei`, `urdf-loader`
+- `@hello-pangea/dnd`
+- Sonner toasts
 
----
+## Important Files
 
-## 🔌 Socket Communication
+```text
+src/main.tsx                         # Providers and React root
+src/App.tsx                          # app wrapper and background
+src/features/App/MainPage.tsx        # shell, tabs, settings drawer, E-stop
+src/contexts/SocketContext.tsx       # Socket.IO client and connection state
+src/contexts/robot/                  # status, kinematics, IO, logs, commands
+src/hooks/useUpdateData.ts           # Socket/TanStack Query data hooks
+src/stores/JointStore.ts             # Zustand joint/viewer store
+src/features/Robot/RobotStudioTab.tsx
+src/features/Robot/SimRobotCards.tsx
+src/features/Robot/PhysRobotCards.tsx
+src/features/Program/ProgramEditor.tsx
+src/features/Program/BlockEditor.tsx
+src/features/Program/CodeGenerator.ts
+src/lib/run6ar.ts                    # small interpreter for generated code
+```
 
-All robot actions and telemetry flow through the shared Socket.IO instance in `DataContext`.
+## Providers
 
-### **Outgoing (`emit`)**
+`main.tsx` wraps the app with:
 
-* `cmd` — sends raw JSON to Teensy (e.g., `{ cmd: "Home", joint: 2, speedFast: 50, speedSlow: 3 }`)
-* `ik_request`, `fk_request` — queries to Python IK service
-* `linearMove`, `linearMoveToTeensy` — stream or batch Cartesian moves
-* `profileLinear` — request a dry-run motion profile
-* Program control events — from block/program runner to backend
+- `QueryClientProvider`
+- `ThemeProvider`
+- `SocketProvider`
+- `RobotDataProviders`
+- `Toaster`
 
-### **Incoming (`on`)**
+`RobotDataProviders` composes:
 
-* `jointStatusAll` — per-joint position, velocity, accel, target
-* `parameters` — full firmware parameter set
-* `linearMove_error`, `linearMoveComplete`
-* `profileLinear_response`, `profileLinear_error`
-* `ik_response`, `ik_error`, `fk_response`, `fk_error`
-* `systemStatus`, `homed`
-* `inputStatus`, `outputStatus`
-* Async Teensy events (`BatchExecStart`, `SegmentLoaded`, `BatchComplete`, `BatchAborted`)
+- `RobotStatusProvider`
+- `RobotKinematicsProvider`
+- `RobotIOProvider`
+- `RobotLogsProvider`
+- `RobotCommandsProvider`
 
----
+## Socket Connection
 
-## 🚀 Main Features
+The bridge URL is selected in this order:
 
-### **Homing**
+1. `localStorage.getItem("6ar.socketUrl")`
+2. `VITE_SOCKET_URL`
+3. `http://192.168.0.55:5001`
 
-* UI buttons for per-joint homing via `Home` command.
-* Shows progress state and final limit offsets.
-* Matches firmware’s fast → backoff → slow → offset sequence.
+The connection uses Socket.IO with websocket transport.
 
-### **Jogging**
+## UI Areas
 
-* Per-joint ± buttons with continuous hold.
-* Jog velocity & accel sliders tied to firmware `Jog` API (`target` in deg/s, `accel` in deg/s²).
-* `StopJog` issued immediately on release or switch hit.
+- `Robot`: robot studio, simulation controls, physical robot controls, FK/IK, pose editor, linear move tools, STL support
+- `Program`: block editor, variable editor, generated 6AR-like program text
+- `Run`: program run logs and execution state
+- settings drawer: parameter/configuration UI
+- header: online/offline badge, status badge, uptime, E-stop button
 
-### **Joint Move**
+## Data Flow
 
-* Absolute or relative axis-by-axis moves.
-* Multi-joint synchronous moves using trapezoidal sync profiles from Python.
-* Honors joint limits from firmware.
-* Works on both simulated and real robot.
+The frontend generally sends robot firmware commands through:
 
-### **IK-based Cartesian Move**
+```ts
+socket.emit("cmd", { cmd: "MoveTo", joint: 1, target: 10, speed: 20, accel: 50 })
+```
 
-* Accepts XYZ + quaternion or Euler targets.
-* Uses Python trapezoidal profiling for smooth motion.
-* **Streaming mode** — direct step-by-step updates to Teensy.
-* **Batched mode** — full profile sent to Teensy via `MoveMultiple`.
+`UARTService.js` adds the command `id` before writing to the Teensy. Firmware replies are broadcast back to the UI under their `cmd` event names.
 
-### **Program Execution**
+Higher-level motion and solver requests use dedicated events:
 
-* Load `.6ar` block-programming files.
-* Supports `MoveJ`, loops, variables, math, waits, and logging.
-* Program Runner sends moves via streaming or batch depending on block type.
-* Execution log shows timestamps, parameters, and errors.
+- `ik_request`
+- `fk_request`
+- `profileLinear`
+- `linearMove`
+- `profileMoveToTeensy`
 
-### **IO Monitoring**
+## Current Features
 
-* View and toggle digital outputs.
-* View digital inputs in real time.
-* Names and enable flags come from firmware config.
+- live bridge connection state
+- live joint status and FK data
+- digital input/output monitoring
+- firmware parameter loading
+- per-joint `Move`, `MoveTo`, `MoveBy`, `MoveMultiple`, `Jog`, `Stop`, `StopAll`
+- per-joint and all-axis homing workflow
+- IK pose editing
+- linear motion preview and streaming
+- batch profile upload to firmware
+- 3D robot visualization
+- block programming with generated code
+- run logs and command/event reporting
 
-### **System Monitoring**
+## Program Runner
 
-* E-stop state, uptime, connection health.
-* Joint telemetry updated live at `CONTROL_DT` rate.
-* Parameter list from firmware (`ListParameters`).
+The program tooling generates and interprets a compact 6AR-style language.
 
----
+Supported parser concepts in `src/lib/run6ar.ts` include:
 
-## 🎯 UI Design Goals
+- `CONST Number`
+- `VAR Number`
+- `VAR Coordinate`
+- `PROC Main`
+- `Home;`
+- `MoveJ`
+- `MoveL`
+- `IF`
+- `FOR`
+- counters
+- simple assignments
+- `LOG`
 
-* **Single-page control panel** — 3D view, jog, home, moves, IO, and program control in one screen.
-* **Modal-based settings** — all configuration changes in popups, non-blocking.
-* **Real-time sync** — 3D viewer follows both simulated and real joint angles.
-* **Responsive layout** — works on wide desktop and reduced-width Electron windows.
-* **Status indicators** — E-stop, homed state, motion active, batch status.
+`CodeGenerator.ts` also emits `SetDO` and `WaitDI` syntax, but the runner only executes statements currently handled by `run6ar.ts`.
 
----
+## Build and Deploy
 
-## 🧩 Modularity
+```bash
+cd 3-frontend
+npm install
+npm run build
+mkdir -p ../2-pi-bridge/public
+cp -r dist/* ../2-pi-bridge/public/
+```
 
-* **Tabs** — Actions, Move Axis, IO, Program Editor, Logs.
-* **Self-contained hooks** — each tab subscribes only to needed events.
-* **`useJointStore` (Zustand)** — decouples joint positions from UI re-renders.
-* **Three.js RobotLoader** — imports URDF/STL, animates joints with lerp for smooth visual motion.
-* **Block Editor** — draggable blocks with popovers, inline math editor, and syntax-preserving runner.
-
----
-
-## 🔮 Future Additions
-
-* Live TCP overlay in viewer.
-* `MoveL` and `MoveC` in block editor.
-* More firmware commands in program runner (`SetDO`, `WaitDI`, etc.).
-* IO diagnostics (pulse output).
-* Real-time error overlay & debug console.
-* Toolpath preview in 3D for planned moves.
-
----
-
-This updated version now matches:
-
-* **Your recent firmware jog API changes** (`target` + `accel` instead of `speed`).
-* **Program execution reality** (works on real robot, not just sim).
-* **Extra socket events** from new firmware batch/async notifications.
-* **Zustand integration** for joint state.
-* **Block programming UI upgrades** (popovers, inline math editor, drag/drop).
-
----
+The Pi bridge serves those files from `2-pi-bridge/public`.

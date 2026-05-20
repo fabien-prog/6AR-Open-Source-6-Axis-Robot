@@ -109,6 +109,7 @@ private:
   void handleOutput(JsonObject &doc);
   void handleRestart(JsonObject &doc);
   void handleListParameters(JsonObject &doc);
+  void handleSetVel(JsonObject &doc);
 
   static constexpr size_t VP_RX_BUF_SIZE = 512U;
   static char rxBuffer[VP_RX_BUF_SIZE];

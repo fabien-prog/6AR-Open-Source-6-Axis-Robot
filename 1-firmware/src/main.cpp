@@ -33,41 +33,51 @@ void setup()
   Serial.println("=== READY ===");
 }
 
+// 20 ms application tick — matches the Pi-side trajectory dt
+static constexpr uint32_t LOOP_PERIOD_US = 20000;
+
 void loop()
 {
-  // 1) Read any incoming lines
+  // ── Fast path: runs every iteration ────────────────────────────────────
+  // At 921600 baud the UART HW FIFO fills in ~0.5 ms; must drain continuously.
   CommManager::instance().poll();
 
-  // 2) Dispatch commands (unless a batch is mid-execution)
-  CommManager::instance().processBufferedLines();
-
-  // 3) E-stop & LED logic
-  SafetyManager::instance().runChecks();
-
-  // 4) If in EXECUTING state, feed the next mini-step
+  // Velocity sub-steps self-throttle via internal micros() gate.
+  // With dt=20 ms and 50 subdivisions they fire every 400 µs (2.5 kHz);
+  // gating this at 20 ms would drop 49 of every 50 sub-steps.
   CommManager::instance().handleBatchExecution();
 
-  // 5) Homing state machine
+  // ── 20 ms application tick ─────────────────────────────────────────────
+  static uint32_t lastTickUs = 0;
+  const uint32_t now = micros();
+  if (now - lastTickUs < LOOP_PERIOD_US)
+    return;
+  lastTickUs += LOOP_PERIOD_US; // += keeps the period exact; avoids drift
+
+  // Dispatch any complete JSON commands received since last tick
+  CommManager::instance().processBufferedLines();
+
+  // E-stop latch check and status-LED blink
+  SafetyManager::instance().runChecks();
+
+  // Homing state machine (phases measured in seconds, 20 ms is plenty)
   CalibrationManager::instance().update();
 
-  // 5.1) Auto-save joint positions when motion stops
+  // Auto-save joint positions on the falling edge of motion
   static bool wasMoving = false;
-  bool nowMoving = !StepperManager::instance().isIdle();
+  const bool nowMoving = !StepperManager::instance().isIdle();
   if (wasMoving && !nowMoving)
   {
-    // we just transitioned from moving → idle
     float positions[CONFIG_JOINT_COUNT];
     for (size_t j = 0; j < CONFIG_JOINT_COUNT; ++j)
-    {
       positions[j] = JointManager::instance().getPosition(j);
-    }
     ConfigManager::instance().saveJointPositions(positions, CONFIG_JOINT_COUNT);
   }
   wasMoving = nowMoving;
 
-  // 6) Persist config if needed
+  // Flush any pending deferred EEPROM writes
   ConfigManager::instance().update();
 
-  // 7) Digital I/O debounce/update
+  // Debounce digital inputs
   IOManager::instance().update();
 }

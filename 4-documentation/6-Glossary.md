@@ -1,160 +1,91 @@
-# Glossary.md – 6AR Robot System
+# Glossary
 
-This glossary defines **all major technical terms, variable names, file names, and protocols** used across the 6AR robot project to ensure clarity for developers and contributors.
+## Robotics
 
----
+| Term | Meaning |
+| --- | --- |
+| 6DOF | Six degrees of freedom, one for each robot joint. |
+| TCP | Tool Center Point, the working point of the mounted tool. |
+| Flange | Final robot frame where tools attach. |
+| FK | Forward kinematics, computing TCP pose from joint angles. |
+| IK | Inverse kinematics, computing joint angles from desired TCP pose. |
+| URDF | XML robot description format used for kinematics and visualization. |
+| Joint space | Motion described as joint angles. |
+| Cartesian space | Motion described as position and orientation in 3D. |
+| Trapezoidal profile | Motion profile with acceleration, cruise, and deceleration phases. |
+| Spherical wrist | Wrist layout where the final three joint axes intersect. |
+| Singularity | Robot pose where control authority or IK stability is reduced. |
 
-## Core Robotics Concepts
+## Firmware
 
-| Term                    | Definition                                                                                                   |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------ |
-| **6DOF**                | 6 Degrees of Freedom – robot has 6 independently controlled joints (rotational), enabling full pose control. |
-| **TCP**                 | Tool Center Point – the "tip" of the robot (e.g., gripper), used as the reference for Cartesian movements.   |
-| **Flange**              | The final frame of the robot arm, to which tools are mounted.                                                |
-| **IK**                  | Inverse Kinematics – determines joint angles needed to achieve a desired pose (position + orientation).      |
-| **FK**                  | Forward Kinematics – determines the pose of the TCP given a set of joint angles.                             |
-| **URDF**                | Unified Robot Description Format – XML-based robot model defining links, joints, and inertial properties.    |
-| **Trajectory**          | A time-based series of positions, velocities, and accelerations the robot should follow.                     |
-| **Joint Space**         | Robot movement described in terms of joint angles.                                                           |
-| **Cartesian Space**     | Movement described in 3D coordinates and orientations.                                                       |
-| **Spherical Wrist**     | A robot configuration where the last 3 joints intersect, allowing decoupled position and orientation IK.     |
-| **Singularity**         | A robot configuration where one or more degrees of freedom become uncontrollable or unstable.                |
-| **Trapezoidal Profile** | A motion profile with acceleration, constant speed, and deceleration phases.                                 |
+| Term | Meaning |
+| --- | --- |
+| `CommManager` | Parses serial JSON, dispatches commands, handles batch upload/execution. |
+| `JointManager` | Degree-space motion API, soft limits, jog, velocity slices. |
+| `StepperManager` | 100 kHz ISR step pulse engine. |
+| `CalibrationManager` | Non-blocking homing state machine. |
+| `SafetyManager` | E-stop and LED policy. |
+| `IOManager` | Debounced inputs and relay outputs. |
+| `ConfigManager` | EEPROM-backed config and saved joint positions. |
+| `HelperManager` | Save positions and restart the Teensy. |
+| `Serial2` | Hardware UART used for Pi-to-Teensy JSON at `921600` baud. |
+| `MoveTo` | Absolute single-joint move. |
+| `MoveBy` | Relative single-joint move. |
+| `MoveMultiple` | Multi-joint position move. |
+| `Jog` | Velocity-mode jog using `target` deg/s and `accel` deg/s². |
+| `Stop` | Current firmware behavior is a global stop. |
+| `StopAll` | Immediate global stop. |
+| `Home` | Per-joint homing sequence. |
+| `BeginBatch` | Starts firmware batch loading. |
+| `M` | One batch velocity segment containing `s` and `a` arrays. |
+| `AbortBatch` | Cancels firmware batch loading/execution. |
+| `SetVel` | Live six-axis velocity command for streamed linear moves. |
+| `ListParameters` | Returns firmware config as a `parameters` event. |
 
----
+## Pi Bridge
 
-## Teensy Firmware (1-firmware/)
+| Term | Meaning |
+| --- | --- |
+| `server.js` | Express/Socket.IO bootstrap listening on port `5001`. |
+| `UARTService.js` | Teensy serial service, ACK tracking, telemetry broadcast. |
+| `IKService.js` | Python child process manager and linear stream pacer. |
+| `SocketService.js` | Frontend Socket.IO event handlers. |
+| `ik_service.py` | Python FK/IK/profile service. |
+| `writeTeensy()` | Adds `id`, writes JSON to UART, waits for ACK. |
+| `awaiting` | Map of pending Teensy command IDs to promises. |
+| `latestTeensyJoints` | Cached last known joint positions. |
+| `CONTROL_DT` | Trajectory timestep, commonly `0.02` seconds. |
+| `linearMove` | Frontend event for streamed linear motion. |
+| `profileMoveToTeensy` | Frontend event for precomputed firmware batch upload. |
+| `profileLinear` | Frontend event for previewing a linear profile. |
 
-### Teensy Files
+## Frontend
 
-| File                      | Description                                                                      |
-| ------------------------- | -------------------------------------------------------------------------------- |
-| `CommManager.cpp`         | Handles serial parsing, JSON decoding, command dispatching, and acknowledgments. |
-| `JointManager.cpp`        | Core stepper control (position, velocity, acceleration, jogging).                |
-| `CalibrationManager.cpp`  | Homing logic per joint, including debounce, limit switch handling.               |
-| `IOManager.cpp`           | Manages digital input/output pins and their debounce states.                     |
-| `SafetyManager.cpp`       | Monitors estop state, soft limits, and halts motion as needed.                   |
-| `Config.cpp` / `Config.h` | Configuration for max speed/accel, motion defaults, and safety settings.         |
-| `PinDef.h`                | Maps joint pins, endstops, IO to pin numbers.                                    |
+| Term | Meaning |
+| --- | --- |
+| `SocketProvider` | Owns the Socket.IO client and connected state. |
+| `RobotDataProviders` | Composes robot status, kinematics, IO, logs, and commands providers. |
+| `useUpdateData.ts` | Hooks that bridge Socket.IO events into TanStack Query. |
+| `RobotStudioTab` | Main robot workspace. |
+| `SimRobotCards` | Simulation, IK, pose, and linear move controls. |
+| `PhysRobotCards` | Physical robot cards and real hardware actions. |
+| `ProgramEditor` | Block programming UI. |
+| `CodeGenerator` | Converts blocks to 6AR-style program text. |
+| `run6ar.ts` | Lightweight interpreter for generated program text. |
+| `RunLogsView` | Program execution and log view. |
+| `JointStore` | Zustand store for joint/viewer state. |
+| `jointStatusAll` | Event with telemetry for all six joints. |
+| `inputStatus` | Event with E-stop, buttons, and limit switch states. |
+| `outputStatus` | Event with relay states. |
+| `systemStatus` | Event with uptime, E-stop, and homing state. |
 
-### Classes & Concepts
+## Protocol Examples
 
-| Term                            | Description                                                                                    |
-| ------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `MoveTo`                        | Command to move a single joint to a position with speed/acceleration.                          |
-| `MoveMultiple`                  | Command to move multiple joints simultaneously (direct or batch).                              |
-| `BeginBatch` / `M` / `EndBatch` | Batch motion execution commands – preloaded trajectory segments.                               |
-| `Jog` / `StopJog`               | Real-time incremental movement for manual control; uses `target` (deg/s) and `accel` (deg/s²). |
-| `Home`                          | Command to perform full homing sequence: fast → backoff → slow → offset.                       |
-| `isHomed[]`                     | Per-joint array tracking whether a joint has completed homing.                                 |
-| `currentPosition[]`             | Step position in degrees.                                                                      |
-| `limitMin[]`, `limitMax[]`      | Joint software-enforced travel limits post-homing.                                             |
-| `CAL_FAST_FORWARD`              | Homing fast approach speed constant.                                                           |
-| `LOOKAHEAD_STEPS`               | Max number of steps that can be buffered in the queue.                                         |
-| `MOVE_BATCH_INTERVAL_MS`        | Delay between sequential `MoveMultiple` packets in batch mode.                                 |
-| `stepPulse()`                   | Function generating step pulses during motion.                                                 |
-
----
-
-## Pi Bridge Server (2-pi-bridge/)
-
-### Key Files
-
-| File                     | Description                                                                 |
-| ------------------------ | --------------------------------------------------------------------------- |
-| `index.js` / `server.js` | Main backend: relays data between frontend, Python IK, and Teensy.          |
-| `socketHandlers.js`      | Organized Socket.IO event handlers.                                         |
-| `ik_service.py`          | Python-based IK solver and linear motion profile generator.                 |
-| `requirements.txt`       | Python packages (numpy, scipy, spatialmath-python, roboticstoolbox-python). |
-| `venv/`                  | Python virtual environment containing dependencies.                         |
-
-### Communication
-
-| Interface          | Description                                                 |
-| ------------------ | ----------------------------------------------------------- |
-| `Serial2` (Teensy) | UART interface to Teensy @ `921600` baud (ASCII JSON).      |
-| `stdin/stdout`     | Communication with `ik_service.py` via child process pipes. |
-| `Socket.IO`        | Bidirectional channel to the React frontend.                |
-
-### Variables & Concepts
-
-| Term              | Description                                                               |
-| ----------------- | ------------------------------------------------------------------------- |
-| `writeTeensy()`   | Sends a JSON command to Teensy with an `id` and waits for ACK.            |
-| `batchQueue[]`    | Queue of pending `MoveMultiple` commands for batch execution.             |
-| `pending[]`       | Tracks sent commands awaiting response from Teensy.                       |
-| `CONTROL_DT`      | Time interval (`dt`) between trajectory points, e.g., 0.02 sec.           |
-| `V_TCP`           | Desired linear speed of TCP in m/s.                                       |
-| `ANG_SPEED`       | Desired rotational speed in deg/s for tool orientation transitions.       |
-| `last_q`          | Joint angles of the last valid IK solution – used for seeding future IK.  |
-| `max_ik_jump_deg` | Clamp for how much a joint can jump between segments (to prevent spikes). |
-| `ctraj()`         | Cartesian interpolator from start pose to end pose (via SE3).             |
-| `SE3`             | Special Euclidean Transform – position + orientation in 3D.               |
-| `Slerp`           | Spherical linear interpolation for rotation blending (quaternions).       |
-
----
-
-## Frontend (3-frontend/)
-
-### Frontend Files
-
-| File              | Description                                                    |
-| ----------------- | -------------------------------------------------------------- |
-| `App.js`         | Root component and layout wrapper.                             |
-| `DataContext.js`  | React context managing global state (joint status, IO, estop). |
-| `socket.js`       | Handles all incoming/outgoing `Socket.IO` events.              |
-| `RobotLoader.js` | 3D viewer using `Three.js` and `@react-three/fiber`.           |
-| `JogTab.js`      | UI for per-joint jogging controls.                             |
-| `MoveAxisTab.js` | Multi-joint motion controls (via IK or manual setpoints).      |
-| `SystemTab.js`   | Estop, restart, system status panel.                           |
-| `ProgramTab.js`  | Block/structured program editor & runner.                      |
-| `RunLogsView.js` | Live logs, playback preview, and syntax viewer.                |
-| `BlockEditor.js` | Drag/drop block programming editor with inline math editing.   |
-
-### UI Concepts
-
-| Term                 | Description                                                             |
-| -------------------- | ----------------------------------------------------------------------- |
-| `jointStatusAll`     | Event returning live data for all joints: angle, velocity, target.      |
-| `digitalInputs[]`    | Array of input channels, each with `enabled`, `status`, `friendlyName`. |
-| `digitalOutputs[]`   | Toggleable outputs in the system UI.                                    |
-| `linearMove`         | Streaming Cartesian move – processed one IK segment at a time.          |
-| `linearMoveToTeensy` | Batched Cartesian move – pre-computed full joint-space motion.          |
-| `profileLinear`      | Backend-only preview of batched motion for simulation.                  |
-| `programCommands[]`  | Structured steps sent as `.6ar` programs for automation.                |
-| `toast()`            | Chakra UI method for showing feedback alerts to users.                  |
-| `@react-three/drei`  | Helpers for 3D rendering (lights, controls, grids).                     |
-
----
-
-## Safety & Diagnostics
-
-| Term                    | Description                                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------------------------- |
-| `estop`                 | Emergency stop – disables all motion. Can be triggered by UI, limit switches, or serial fault. |
-| `StopAll`               | Command sent by backend when queue overruns, estop is hit, or connection is lost.              |
-| `isHomed[]`             | Each joint must be homed before any motion is accepted.                                        |
-| `limitMin` / `limitMax` | Software-defined limits enforced after homing.                                                 |
-| `debounceMillis`        | Time filter applied to input transitions to avoid false triggers.                              |
-| `BatchExecStart`        | Event indicating Teensy began executing a preloaded batch.                                     |
-| `SegmentLoaded`         | Event confirming a batch segment was accepted.                                                 |
-| `BatchComplete`         | Event when a batch finishes successfully.                                                      |
-| `BatchAborted`          | Event when a batch is stopped mid-execution.                                                   |
-| `status: "ok"`          | JSON response status confirming success.                                                       |
-| `status: "error"`       | JSON error from Teensy, backend, or solver (includes description).                             |
-
----
-
-## Protocols & JSON Structures
-
-| Structure               | Example                                                                                                           |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `MoveTo` Command        | `{ "cmd": "MoveTo", "joint": 4, "target": 90, "speed": 50, "accel": 10 }`                                         |
-| `MoveMultiple` Command  | `{ "cmd": "MoveMultiple", "joints": [1,2], "targets": [...], "speeds": [...], "accels": [...] }`                  |
-| `BeginBatch` + Segments | `{ "cmd": "BeginBatch" }` → `{ "cmd": "M", "joints": [...], "targets": [...], "speeds": [...], "accels": [...] }` |
-| `Home` Command          | `{ "cmd": "Home", "joint": 6, "speedFast": 50, "speedSlow": 3 }`                                                  |
-| `Jog` Command           | `{ "cmd": "Jog", "joint": 2, "target": 15, "accel": 20 }`                                                         |
-| `IK Result`             | `{ "initial": [...], "final": [...], "dt": 0.02, "speeds": [...], "accels": [...] }`                              |
-| `jointStatusAll` Event  | `{ "cmd": "jointStatusAll", "data": [{ "joint": 1, "position": ..., "velocity": ..., "target": ... }] }`          |
-
----
+| Structure | Example |
+| --- | --- |
+| MoveTo | `{ "cmd": "MoveTo", "joint": 1, "target": 10, "speed": 20, "accel": 50 }` |
+| Jog | `{ "cmd": "Jog", "joint": 2, "target": 15, "accel": 100 }` |
+| SetVel | `{ "cmd": "SetVel", "s": [0,0,0,0,0,0], "a": [100,100,100,100,100,100] }` |
+| BeginBatch | `{ "cmd": "BeginBatch", "count": 120, "dt": 0.02 }` |
+| Batch Segment | `{ "cmd": "M", "s": [1,2,3,4,5,6], "a": [10,10,10,10,10,10] }` |
+| Joint Status | `{ "cmd": "jointStatusAll", "data": [{ "joint": 1, "position": 0, "velocity": 0, "acceleration": 0, "target": 0 }] }` |
